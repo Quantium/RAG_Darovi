@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.drive.downloader import DriveDownloader
 
@@ -12,12 +12,26 @@ class TestDriveDownloader:
     def downloader(self, mock_drive_service, mock_minio_client, settings):
         metadata_repo = AsyncMock()
         metadata_repo.get_page_token.return_value = "start-token"
-        return DriveDownloader(
-            drive_service=mock_drive_service,
-            storage=mock_minio_client,
-            metadata_repo=metadata_repo,
-            settings=settings,
-        )
+        metadata_repo.get_file.return_value = None
+        
+        # Mock MediaIoBaseDownload to avoid real API calls and complex mocking
+        with patch("src.drive.downloader.MediaIoBaseDownload") as mock_download_cls:
+            mock_downloader = MagicMock()
+            mock_downloader.next_chunk.return_value = (None, True)
+            mock_download_cls.return_value = mock_downloader
+            
+            # Make the mocked FH receive some data
+            def side_effect(fh, request):
+                fh.write(b"mock content")
+                return mock_downloader
+            mock_download_cls.side_effect = side_effect
+            
+            yield DriveDownloader(
+                drive_service=mock_drive_service,
+                storage=mock_minio_client,
+                metadata_repo=metadata_repo,
+                settings=settings,
+            )
 
     async def test_incremental_sync_returns_changed_files(self, downloader):
         downloader._drive_service.changes.return_value.list.return_value.execute.return_value = {
@@ -43,16 +57,21 @@ class TestDriveDownloader:
     async def test_download_google_doc_exports_as_text(self, downloader):
         file_meta = {"id": "f1", "name": "doc", "mimeType": "application/vnd.google-apps.document"}
         await downloader.download_file(file_meta)
-        # Verify export_media was called (not get_media)
+        downloader._drive_service.files.return_value.export_media.assert_called_with(
+            fileId="f1", mimeType="text/plain"
+        )
 
     async def test_download_google_sheet_exports_as_csv(self, downloader):
         file_meta = {"id": "f1", "name": "sheet", "mimeType": "application/vnd.google-apps.spreadsheet"}
         await downloader.download_file(file_meta)
+        downloader._drive_service.files.return_value.export_media.assert_called_with(
+            fileId="f1", mimeType="text/csv"
+        )
 
     async def test_download_creates_metadata_record(self, downloader):
         file_meta = {"id": "f1", "name": "test.pdf", "mimeType": "application/pdf"}
         await downloader.download_file(file_meta)
-        downloader._metadata_repo.create_file_record.assert_called_once()
+        downloader._metadata_repo.upsert_file.assert_called()
 
     async def test_skip_already_processed_file(self, downloader):
         downloader._metadata_repo.get_file.return_value = MagicMock(

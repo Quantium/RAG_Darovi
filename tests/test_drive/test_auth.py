@@ -32,5 +32,5 @@ class TestDriveAuth:
         mock_creds.return_value = MagicMock()
         build_drive_service("credentials/valid.json")
         call_args = mock_creds.call_args
-        scopes = call_args[1].get("scopes") or call_args[0][1] if len(call_args[0]) > 1 else None
+        scopes = call_args[1].get("scopes") or (call_args[0][1] if len(call_args[0]) > 1 else None)
         assert any("drive.readonly" in s for s in (scopes or []))
