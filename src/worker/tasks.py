@@ -1,18 +1,12 @@
-from __future__ import annotations
-
 import asyncio
-from uuid import uuid4
-
-import redis
 import structlog
+import redis
+from uuid import uuid4
 from celery import chain
 
-from src.worker.celery_app import RetryableTask, app
+from src.worker.celery_app import app, RetryableTask
 from src.worker.task_helpers import (
-    build_metadata_repo,
-    build_settings,
-    build_storage,
-    derive_document_type,
+    build_settings, build_storage, build_metadata_repo, derive_document_type,
 )
 
 logger = structlog.get_logger()
@@ -23,15 +17,22 @@ SYNC_LOCK_TTL = 1800  # 30 minutes
 
 @app.task(bind=True, max_retries=1)
 def run_incremental_sync(self):
-    """Orchestrate: fetch changed files from Drive, dispatch per-file pipelines."""
+    """Orchestrate: fetch changed files from Drive, dispatch per-file pipelines.
+
+    Acquires a distributed lock to prevent concurrent syncs.
+    """
     from src.drive.auth import build_drive_service
     from src.drive.downloader import DriveDownloader
+
+    headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    task_logger = logger.bind(trace_id=trace_id)
 
     settings = build_settings()
     r = redis.Redis.from_url(settings.redis_broker_url)
 
     if not r.set(SYNC_LOCK_KEY, "1", nx=True, ex=SYNC_LOCK_TTL):
-        logger.warning("sync.skipped_concurrent", reason="Another sync is already running")
+        task_logger.warning("sync.skipped_concurrent", reason="Another sync is already running")
         return
 
     storage = build_storage(settings)
@@ -44,15 +45,15 @@ def run_incremental_sync(self):
             metadata_repo=repo, settings=settings,
         )
         changed_files, deleted_ids = asyncio.run(downloader.incremental_sync())
-        logger.info("sync.files_found", changed=len(changed_files), deleted=len(deleted_ids))
+        task_logger.info("sync.files_found", changed=len(changed_files), deleted=len(deleted_ids))
 
         for file_meta in changed_files:
-            dispatch_file_pipeline(file_meta)
+            dispatch_file_pipeline(file_meta, trace_id=trace_id)
 
         for drive_file_id in deleted_ids:
-            delete_file_vectors.delay(drive_file_id)
+            delete_file_vectors.delay(drive_file_id, headers={"trace_id": trace_id})
 
-        logger.info("sync.dispatched", changed=len(changed_files), deleted=len(deleted_ids))
+        task_logger.info("sync.dispatched", changed=len(changed_files), deleted=len(deleted_ids))
     finally:
         r.delete(SYNC_LOCK_KEY)
         cleanup()
@@ -63,6 +64,11 @@ def download_file(self, file_meta: dict) -> dict:
     """Download a single file from Drive to MinIO."""
     from src.drive.auth import build_drive_service
     from src.drive.downloader import DriveDownloader
+
+    headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=file_meta["id"], task="download_file")
+    task_logger.info("task.started")
 
     settings = build_settings()
     storage = build_storage(settings)
@@ -77,16 +83,19 @@ def download_file(self, file_meta: dict) -> dict:
         minio_key = asyncio.run(downloader.download_file(file_meta))
 
         if minio_key is None:
-            logger.info("task.download.skipped", drive_file_id=file_meta.get("id"))
-            return {"skipped": True, "drive_file_id": file_meta.get("id")}
+            task_logger.info("task.skipped")
+            return {"skipped": True, "drive_file_id": file_meta["id"]}
 
-        logger.info("task.download.completed", drive_file_id=file_meta.get("id"), minio_key=minio_key)
+        task_logger.info("task.completed", minio_key=minio_key)
         return {
-            "drive_file_id": file_meta.get("id"),
+            "drive_file_id": file_meta["id"],
             "minio_raw_key": minio_key,
-            "mime_type": file_meta.get("mimeType"),
-            "name": file_meta.get("name"),
+            "mime_type": file_meta["mimeType"],
+            "name": file_meta["name"],
         }
+    except Exception as exc:
+        task_logger.error("task.failed", error=str(exc))
+        raise
     finally:
         cleanup()
 
@@ -94,23 +103,29 @@ def download_file(self, file_meta: dict) -> dict:
 @app.task(base=RetryableTask, bind=True)
 def convert_file(self, download_result: dict) -> dict:
     """Convert a raw file to plain text."""
-    from src.converter import get_converter
+    headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    drive_file_id = download_result.get("drive_file_id", "unknown")
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="convert_file")
+    task_logger.info("task.started")
 
     if download_result.get("skipped"):
+        task_logger.info("task.skipped", reason="previous task skipped")
         return download_result
+
+    from src.converter import get_converter
 
     settings = build_settings()
     storage = build_storage(settings)
     repo, cleanup = build_metadata_repo(settings)
 
-    drive_file_id = download_result["drive_file_id"]
     try:
         raw_bytes = storage.download(settings.minio_bucket_raw, download_result["minio_raw_key"])
         try:
             converter = get_converter(download_result["mime_type"])
         except ValueError:
             repo.update_status(drive_file_id, "skipped", error_message=f"Unsupported MIME: {download_result['mime_type']}")
-            logger.warning("task.convert.unsupported", drive_file_id=drive_file_id, mime_type=download_result["mime_type"])
+            task_logger.warning("task.skipped", reason="unsupported mime type", mime_type=download_result["mime_type"])
             return {"skipped": True, "drive_file_id": drive_file_id}
 
         text = converter.convert(raw_bytes, download_result["name"], download_result["mime_type"])
@@ -119,13 +134,16 @@ def convert_file(self, download_result: dict) -> dict:
         storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
         repo.update_status(drive_file_id, "converted")
 
-        logger.info("task.convert.completed", drive_file_id=drive_file_id, text_key=text_key)
+        task_logger.info("task.completed", text_key=text_key)
         return {
             "drive_file_id": drive_file_id,
             "minio_text_key": text_key,
             "name": download_result["name"],
             "document_type": derive_document_type(download_result["mime_type"]),
         }
+    except Exception as exc:
+        task_logger.error("task.failed", error=str(exc))
+        raise
     finally:
         cleanup()
 
@@ -133,7 +151,14 @@ def convert_file(self, download_result: dict) -> dict:
 @app.task(base=RetryableTask, bind=True)
 def embed_file(self, convert_result: dict) -> dict:
     """Chunk, embed, and store vectors. Placeholder until Phase 5."""
+    headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    drive_file_id = convert_result.get("drive_file_id", "unknown")
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="embed_file")
+    task_logger.info("task.started")
+
     if convert_result.get("skipped"):
+        task_logger.info("task.skipped", reason="previous task skipped")
         return convert_result
 
     raise NotImplementedError(
@@ -144,43 +169,46 @@ def embed_file(self, convert_result: dict) -> dict:
 @app.task(base=RetryableTask, bind=True)
 def delete_file_vectors(self, drive_file_id: str) -> dict:
     """Remove vectors from Milvus, files from MinIO, and metadata from PostgreSQL."""
-    # Placeholder for MilvusStore until Phase 5
-    # from src.vectorizer.milvus_store import MilvusStore
+    from src.vectorizer.milvus_store import MilvusStore
+
+    headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="delete_file_vectors")
+    task_logger.info("task.started")
 
     settings = build_settings()
     storage = build_storage(settings)
     repo, cleanup = build_metadata_repo(settings)
 
     try:
-        # Placeholder for Milvus deletion
-        # store = MilvusStore(settings)
-        # store.delete_by_source(drive_file_id)
-        logger.info("task.delete.vectors_removed_placeholder", drive_file_id=drive_file_id)
+        store = MilvusStore(settings)
+        store.delete_by_source(drive_file_id)
+        task_logger.info("vectors.removed")
 
         # Clean up MinIO objects
         raw_key = f"{drive_file_id}"
         text_key = f"{drive_file_id}.txt"
-        
-        # We need to list objects or know the exact name.
-        # Since we use drive_file_id as prefix for raw and f"{drive_file_id}.txt" for text:
         try:
-             # MinIO client (storage._client) could be used to list and delete prefix
-             # For now, let's just try to delete the known text key.
-             # Raw key is harder as it includes the original filename.
-             storage.delete(settings.minio_bucket_text, text_key)
+            storage.delete(settings.minio_bucket_raw, raw_key)
+            storage.delete(settings.minio_bucket_text, text_key)
         except Exception as exc:
-            logger.warning("task.delete.storage_cleanup_partial", drive_file_id=drive_file_id, error=str(exc))
+            task_logger.warning("storage_cleanup.partial", error=str(exc))
 
         repo.delete_file_record(drive_file_id)
-        logger.info("task.delete.completed", drive_file_id=drive_file_id)
+        task_logger.info("task.completed")
         return {"drive_file_id": drive_file_id, "deleted": True}
+    except Exception as exc:
+        task_logger.error("task.failed", error=str(exc))
+        raise
     finally:
         cleanup()
 
 
-def dispatch_file_pipeline(file_meta: dict) -> None:
+def dispatch_file_pipeline(file_meta: dict, trace_id: str | None = None) -> None:
     """Build and dispatch the download → convert → embed chain for one file."""
-    trace_id = str(uuid4())
+    if trace_id is None:
+        trace_id = str(uuid4())
+
     pipeline = chain(
         download_file.s(file_meta),
         convert_file.s(),

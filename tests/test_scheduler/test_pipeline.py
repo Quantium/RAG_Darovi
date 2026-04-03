@@ -4,13 +4,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import patch
 
-from src.scheduler.pipeline import schedule_sync
+from src.scheduler.pipeline import trigger_incremental_sync
 
 
 class TestSchedulerPipeline:
     @patch("src.scheduler.pipeline.run_incremental_sync")
     def test_schedule_sync_dispatches_task(self, mock_task):
-        schedule_sync()
+        trigger_incremental_sync()
         mock_task.delay.assert_called_once()
 
     @patch("src.worker.celery_app.settings")

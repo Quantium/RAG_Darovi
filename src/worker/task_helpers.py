@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from typing import Callable
 
+from config.settings import Settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
-
-from config.settings import Settings
-from src.metadata.repository import SyncMetadataRepository
 from src.storage.backend import MinIOStorage
+from src.metadata.repository import SyncMetadataRepository
 
 
 def build_settings() -> Settings:
@@ -22,11 +21,10 @@ def build_storage(settings: Settings | None = None) -> MinIOStorage:
 def build_metadata_repo(settings: Settings | None = None) -> tuple[SyncMetadataRepository, Callable[[], None]]:
     """Return (repo, cleanup_fn). Caller must call cleanup_fn() when done.
 
-    Uses synchronous engine — safe to use in Celery tasks without
+    Uses synchronous psycopg2 engine — safe to use in Celery tasks without
     event loop issues.
     """
     s = settings or build_settings()
-    # Note: Using database_url_sync which should use a sync driver like psycopg2 or sqlite (sync)
     engine = create_engine(s.database_url_sync.get_secret_value())
     session = Session(engine)
     repo = SyncMetadataRepository(session)
