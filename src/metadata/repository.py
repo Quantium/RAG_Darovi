@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy import DateTime, Integer, String, Text, delete, select, update
@@ -64,7 +64,15 @@ class MetadataRepository:
         await self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
-            .values(status=status, error_message=error_message, last_processed_at=datetime.utcnow())
+            .values(status=status, error_message=error_message)
+        )
+        await self._session.commit()
+
+    async def update_last_processed_at(self, drive_file_id: str) -> None:
+        await self._session.execute(
+            update(FileRecord)
+            .where(FileRecord.drive_file_id == drive_file_id)
+            .values(last_processed_at=datetime.now(timezone.utc))
         )
         await self._session.commit()
 
@@ -149,7 +157,15 @@ class SyncMetadataRepository:
         self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
-            .values(status=status, error_message=error_message, last_processed_at=datetime.utcnow())
+            .values(status=status, error_message=error_message)
+        )
+        self._session.commit()
+
+    def update_last_processed_at(self, drive_file_id: str) -> None:
+        self._session.execute(
+            update(FileRecord)
+            .where(FileRecord.drive_file_id == drive_file_id)
+            .values(last_processed_at=datetime.now(timezone.utc))
         )
         self._session.commit()
 

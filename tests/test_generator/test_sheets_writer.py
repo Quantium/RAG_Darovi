@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import MagicMock, patch
+import gspread
 
 from src.generator.sheets_writer import SheetsWriter
 
@@ -19,7 +20,8 @@ class TestSheetsWriter:
     @patch("src.generator.sheets_writer.gspread.service_account")
     def test_creates_sheet_if_missing(self, mock_gspread):
         mock_spreadsheet = MagicMock()
-        mock_spreadsheet.worksheet.side_effect = Exception("not found")
+        # Side effect should be the specific gspread exception
+        mock_spreadsheet.worksheet.side_effect = gspread.WorksheetNotFound("not found")
         mock_spreadsheet.add_worksheet.return_value = MagicMock()
         mock_gspread.return_value.open_by_key.return_value = mock_spreadsheet
         writer = SheetsWriter(credentials_path="credentials/sa.json")

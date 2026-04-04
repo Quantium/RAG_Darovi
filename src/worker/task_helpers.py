@@ -36,6 +36,15 @@ def build_metadata_repo(settings: Settings | None = None) -> tuple[SyncMetadataR
     return repo, cleanup
 
 
+def ensure_milvus_collection(settings: Settings | None = None) -> None:
+    """Create the Milvus collection if it doesn't exist. Idempotent."""
+    from src.vectorizer.milvus_store import MilvusStore
+
+    s = settings or build_settings()
+    store = MilvusStore(s)
+    store.ensure_collection()
+
+
 MIME_TO_DOC_TYPE: dict[str, str] = {
     "application/pdf": "pdf",
     "application/vnd.google-apps.document": "doc",

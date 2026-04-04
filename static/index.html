@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Darovi</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="app">
+        <header>
+            <div class="header-content">
+                <h1>RAG Darovi</h1>
+                <div id="status-container">
+                    <div id="status-indicator" title="Pipeline status"></div>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="clear-chat" aria-label="Clear chat" title="New conversation">🗑️</button>
+                <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
+            </div>
+        </header>
+
+        <div class="main-layout">
+            <aside id="filters">
+                <h3>Filters</h3>
+                <button class="filter-btn active" data-type="">All</button>
+                <button class="filter-btn" data-type="doc">📝 Docs</button>
+                <button class="filter-btn" data-type="sheet">📊 Sheets</button>
+                <button class="filter-btn" data-type="pdf">📄 PDFs</button>
+            </aside>
+
+            <main id="chat-container">
+                <div id="messages">
+                    <div class="message assistant">
+                        <div class="bubble">Hello! I am Darovi, your RAG assistant. Ask me anything about your documents.</div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <footer>
+            <form id="chat-form">
+                <input type="text" id="query-input"
+                       placeholder="Ask about your documents..."
+                       autocomplete="off" required>
+                <button type="submit" id="send-btn">Send</button>
+            </form>
+        </footer>
+    </div>
+    <script src="/app.js"></script>
+</body>
+</html>
