@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 from uuid import uuid4
 
 import redis
@@ -30,7 +29,7 @@ def run_incremental_sync(self):
     from src.drive.auth import build_drive_service
     from src.drive.downloader import DriveDownloader
 
-    headers = {}
+    headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
@@ -75,13 +74,11 @@ def download_file(self, file_meta: dict) -> dict:
     from src.drive.auth import build_drive_service
     from src.drive.downloader import DriveDownloader
 
-    headers = {}
+    headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
-    task_logger = logger.bind(
-        trace_id=trace_id, drive_file_id=file_meta["id"], task="download_file"
-    )
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=file_meta["id"], task="download_file")
     task_logger.info("task.started")
 
     settings = build_settings()
@@ -119,7 +116,7 @@ def download_file(self, file_meta: dict) -> dict:
 @app.task(base=RetryableTask, bind=True)
 def convert_file(self, download_result: dict) -> dict:
     """Convert a raw file to plain text."""
-    headers = {}
+    headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
@@ -154,9 +151,7 @@ def convert_file(self, download_result: dict) -> dict:
             )
             return {"skipped": True, "drive_file_id": drive_file_id}
 
-        text = converter.convert(
-            raw_bytes, download_result["name"], download_result["mime_type"]
-        )
+        text = converter.convert(raw_bytes, download_result["name"], download_result["mime_type"])
 
         text_key = f"{drive_file_id}.txt"
         storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
@@ -179,7 +174,7 @@ def convert_file(self, download_result: dict) -> dict:
 @app.task(base=RetryableTask, bind=True)
 def embed_file(self, convert_result: dict) -> dict:
     """Chunk text, embed via Ollama, upsert vectors to Milvus."""
-    headers = {}
+    headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
@@ -195,9 +190,7 @@ def embed_file(self, convert_result: dict) -> dict:
     storage = build_storage(settings)
 
     try:
-        text_bytes = storage.download(
-            settings.minio_bucket_text, convert_result["minio_text_key"]
-        )
+        text_bytes = storage.download(settings.minio_bucket_text, convert_result["minio_text_key"])
         text = text_bytes.decode("utf-8")
 
         from src.vectorizer.chunker import DocumentChunker
@@ -275,13 +268,11 @@ def delete_file_vectors(self, drive_file_id: str) -> dict:
     """Remove vectors from Milvus, files from MinIO, and metadata from PostgreSQL."""
     from src.vectorizer.milvus_store import MilvusStore
 
-    headers = {}
+    headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
-    task_logger = logger.bind(
-        trace_id=trace_id, drive_file_id=drive_file_id, task="delete_file_vectors"
-    )
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="delete_file_vectors")
     task_logger.info("task.started")
 
     settings = build_settings()
@@ -341,13 +332,14 @@ def run_sql_generation(self, job_id: str, description: str, target_db: str) -> d
 
         # 2. Retrieve chunks for data extraction
         chunks = asyncio.run(retriever.retrieve(description, top_k=50))
-        
+
         # 3. Extract Data
         insert_statements = asyncio.run(sql_gen.extract_data(chunks, schema_sql))
-        
+
         # 4. Write to DB
         # Use generated schema engine
         engine = create_async_engine(settings.database_url_generated.get_secret_value())
+
         async def _write():
             async with AsyncSession(engine) as session:
                 writer = DBWriter(session)
@@ -355,22 +347,16 @@ def run_sql_generation(self, job_id: str, description: str, target_db: str) -> d
                 await writer.execute(schema_sql)
                 # Then insert data
                 return await writer.execute_many(insert_statements)
-        
+
         count = asyncio.run(_write())
         asyncio.run(engine.dispose())
 
-        r.hset(f"sql_job:{job_id}", mapping={
-            "status": "completed",
-            "insert_count": str(count)
-        })
+        r.hset(f"sql_job:{job_id}", mapping={"status": "completed", "insert_count": str(count)})
         return {"job_id": job_id, "status": "completed", "insert_count": count}
 
     except Exception as exc:
         logger.error("task.sql_gen.failed", job_id=job_id, error=str(exc))
-        r.hset(f"sql_job:{job_id}", mapping={
-            "status": "failed",
-            "error": str(exc)
-        })
+        r.hset(f"sql_job:{job_id}", mapping={"status": "failed", "error": str(exc)})
         raise
 
 

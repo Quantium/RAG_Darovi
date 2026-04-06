@@ -1,9 +1,9 @@
 """Tests for src/vectorizer/chunker.py — turns GREEN in Phase 3."""
+
 from __future__ import annotations
 
-import pytest
 
-from src.vectorizer.chunker import DocumentChunker, Chunk
+from src.vectorizer.chunker import DocumentChunker
 
 
 class TestDocumentChunker:

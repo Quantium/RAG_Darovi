@@ -11,7 +11,7 @@ class DocsConverter(FileConverter):
     def convert(self, raw_bytes: bytes, file_name: str, mime_type: str) -> str:
         """Process plain text from Google Docs export."""
         logger.info("converter.docs.start", file_name=file_name)
-        
+
         if not raw_bytes:
             return ""
 
@@ -23,4 +23,3 @@ class DocsConverter(FileConverter):
         except Exception as e:
             logger.error("converter.docs.error", file_name=file_name, error=str(e))
             raise
-        

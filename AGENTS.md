@@ -11,6 +11,7 @@ RAG pipeline application: terabyte-scale document ingestion from Google Drive, v
 1. **RED** — Write failing tests first (Phase 2 defines all test stubs).
 2. **GREEN** — Implement minimum code to pass tests.
 3. **REFACTOR** — Clean up while keeping tests green.
+4. **ENVIRONMENT** - The project must run using Docker everytime, the dependencies must be installed just in a controled environment using venv
 
 Never skip a failing test to start the next step. Run `pytest` after every implementation change.
 

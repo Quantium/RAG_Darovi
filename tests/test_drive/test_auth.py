@@ -1,4 +1,5 @@
 """Tests for src/drive/auth.py — turns GREEN in Phase 3."""
+
 from __future__ import annotations
 
 import pytest

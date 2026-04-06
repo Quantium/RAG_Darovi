@@ -1,4 +1,5 @@
 """Tests for src/automation/engine.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel
@@ -36,7 +36,7 @@ def parse_automation(yaml_str: str) -> AutomationConfig:
         raise ValueError(f"Invalid automation configuration: {str(exc)}")
 
 
-def matches_file(automation_filter: AutomationFilter, file_meta: dict) -> bool:
+def matches_file(automation_filter: AutomationFilter, file_meta: dict[str, Any]) -> bool:
     """Return True if the file metadata matches the filter criteria."""
     if not automation_filter:
         return True

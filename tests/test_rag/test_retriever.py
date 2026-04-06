@@ -1,8 +1,9 @@
 """Tests for src/rag/retriever.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 from src.rag.retriever import Retriever
 

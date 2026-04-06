@@ -1,4 +1,5 @@
 """Tests for src/generator/sql_generator.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest
@@ -34,20 +35,25 @@ class TestSQLGenerator:
 
     def test_validate_rejects_drop_table(self):
         from src.generator.sql_generator import SQLGenerator
+
         assert SQLGenerator.validate_statement("DROP TABLE users;") is False
 
     def test_validate_rejects_delete(self):
         from src.generator.sql_generator import SQLGenerator
+
         assert SQLGenerator.validate_statement("DELETE FROM users WHERE id = 1;") is False
 
     def test_validate_rejects_update(self):
         from src.generator.sql_generator import SQLGenerator
+
         assert SQLGenerator.validate_statement("UPDATE users SET name = 'x';") is False
 
     def test_validate_accepts_insert(self):
         from src.generator.sql_generator import SQLGenerator
+
         assert SQLGenerator.validate_statement("INSERT INTO invoices VALUES (1, 100.0);") is True
 
     def test_validate_accepts_create_table(self):
         from src.generator.sql_generator import SQLGenerator
+
         assert SQLGenerator.validate_statement("CREATE TABLE invoices (id INT);") is True

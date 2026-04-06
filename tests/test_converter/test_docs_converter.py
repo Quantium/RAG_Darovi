@@ -1,4 +1,5 @@
 """Tests for src/converter/docs_converter.py — turns GREEN in Phase 3."""
+
 from __future__ import annotations
 
 from src.converter.docs_converter import DocsConverter

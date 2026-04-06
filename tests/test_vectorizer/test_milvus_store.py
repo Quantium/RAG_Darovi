@@ -1,8 +1,9 @@
 """Tests for src/vectorizer/milvus_store.py — turns GREEN in Phase 5."""
+
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from src.vectorizer.milvus_store import MilvusStore
 
@@ -23,7 +24,9 @@ class TestMilvusStore:
         mock_milvus_client.insert.assert_called_once()
 
     def test_search_returns_results(self, store, mock_milvus_client):
-        mock_milvus_client.search.return_value = [[MagicMock(id="h1", score=0.95, entity=MagicMock(get=lambda k: "val"))]]
+        mock_milvus_client.search.return_value = [
+            [MagicMock(id="h1", score=0.95, entity=MagicMock(get=lambda k: "val"))]
+        ]
         results = store.search([0.1] * 768, top_k=5)
         assert isinstance(results, list)
 

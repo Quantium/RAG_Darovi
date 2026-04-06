@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import AsyncIterator, Protocol, Any
+from collections.abc import AsyncIterator
+from typing import Any, Protocol, cast
 
 import openai
 import structlog
@@ -19,7 +20,7 @@ class LLMClient(Protocol):
         temperature: float = 0.3,
     ) -> str: ...
 
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[dict[str, str]],
         max_tokens: int = 2048,
@@ -31,6 +32,9 @@ class OpenAICompatibleLLMClient:
     """LLM client for any OpenAI-compatible API (Ollama, Gemini, DeepSeek)."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        resolved_base: str | None = None
+        resolved_key: str | None = None
+        resolved_model: str | None = None
         if args and isinstance(args[0], Settings):
             settings = args[0]
             # Use same logic as create_llm_client but inside __init__ for test compatibility
@@ -47,19 +51,22 @@ class OpenAICompatibleLLMClient:
             }
             if settings.llm_provider not in providers:
                 raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
-            
-            base_url, api_key = providers[settings.llm_provider]
-            model = settings.llm_model
-        else:
-            base_url = kwargs.get("base_url") or (args[0] if len(args) > 0 else None)
-            api_key = kwargs.get("api_key") or (args[1] if len(args) > 1 else None)
-            model = kwargs.get("model") or (args[2] if len(args) > 2 else None)
 
-        if not base_url or not api_key or not model:
+            resolved_base, resolved_key = providers[settings.llm_provider]
+            resolved_model = settings.llm_model
+        else:
+            raw_base = kwargs.get("base_url") or (args[0] if len(args) > 0 else None)
+            raw_key = kwargs.get("api_key") or (args[1] if len(args) > 1 else None)
+            raw_model = kwargs.get("model") or (args[2] if len(args) > 2 else None)
+            resolved_base = str(raw_base) if raw_base is not None else None
+            resolved_key = str(raw_key) if raw_key is not None else None
+            resolved_model = str(raw_model) if raw_model is not None else None
+
+        if not resolved_base or not resolved_key or not resolved_model:
             raise TypeError("OpenAICompatibleLLMClient requires base_url, api_key, and model (or a Settings object)")
 
-        self._client = openai.AsyncOpenAI(base_url=base_url, api_key=api_key)
-        self._model = model
+        self._client = openai.AsyncOpenAI(base_url=resolved_base, api_key=resolved_key)
+        self._model = resolved_model
         self._consecutive_failures = 0
         self._circuit_open_until: float = 0.0
 
@@ -73,7 +80,7 @@ class OpenAICompatibleLLMClient:
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
-                messages=messages,
+                messages=cast(Any, messages),
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
@@ -94,12 +101,12 @@ class OpenAICompatibleLLMClient:
         try:
             stream = await self._client.chat.completions.create(
                 model=self._model,
-                messages=messages,
+                messages=cast(Any, messages),
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stream=True,
             )
-            async for chunk in stream:
+            async for chunk in cast(AsyncIterator[Any], stream):
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta.content
@@ -114,9 +121,7 @@ class OpenAICompatibleLLMClient:
     def _check_circuit(self) -> None:
         if self._consecutive_failures >= 3 and time.time() < self._circuit_open_until:
             wait_time = self._circuit_open_until - time.time()
-            raise ConnectionError(
-                f"Circuit breaker open. Retry after {wait_time:.0f}s"
-            )
+            raise ConnectionError(f"Circuit breaker open. Retry after {wait_time:.0f}s")
 
     def _record_failure(self) -> None:
         self._consecutive_failures += 1

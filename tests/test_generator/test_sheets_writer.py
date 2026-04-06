@@ -1,7 +1,7 @@
 """Tests for src/generator/sheets_writer.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock, patch
 import gspread
 

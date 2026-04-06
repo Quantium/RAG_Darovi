@@ -76,8 +76,11 @@ class MetadataRepository:
         )
         await self._session.commit()
 
-    async def list_by_status(self, status: str) -> Sequence[FileRecord]:
-        result = await self._session.execute(select(FileRecord).where(FileRecord.status == status))
+    async def list_by_status(self, status: str | None) -> Sequence[FileRecord]:
+        if status is None:
+            result = await self._session.execute(select(FileRecord))
+        else:
+            result = await self._session.execute(select(FileRecord).where(FileRecord.status == status))
         return result.scalars().all()
 
     async def upsert_file(
@@ -151,7 +154,9 @@ class SyncMetadataRepository:
         return record
 
     def get_file(self, drive_file_id: str) -> FileRecord | None:
-        return self._session.execute(select(FileRecord).where(FileRecord.drive_file_id == drive_file_id)).scalar_one_or_none()
+        return self._session.execute(
+            select(FileRecord).where(FileRecord.drive_file_id == drive_file_id)
+        ).scalar_one_or_none()
 
     def update_status(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
         self._session.execute(
@@ -169,7 +174,9 @@ class SyncMetadataRepository:
         )
         self._session.commit()
 
-    def list_by_status(self, status: str) -> Sequence[FileRecord]:
+    def list_by_status(self, status: str | None) -> Sequence[FileRecord]:
+        if status is None:
+            return self._session.execute(select(FileRecord)).scalars().all()
         return self._session.execute(select(FileRecord).where(FileRecord.status == status)).scalars().all()
 
     def upsert_file(
@@ -177,6 +184,7 @@ class SyncMetadataRepository:
     ) -> None:
         # SQLite dialect specific upsert
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
         stmt = sqlite_insert(FileRecord).values(
             drive_file_id=drive_file_id,
             name=name,
@@ -213,6 +221,7 @@ class SyncMetadataRepository:
 
     def update_page_token(self, token: str) -> None:
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
         stmt = sqlite_insert(SyncState).values(key="drive_page_token", value=token)
         stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value})
         self._session.execute(stmt)

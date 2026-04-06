@@ -1,7 +1,7 @@
 """Tests for src/scheduler/pipeline.py — turns GREEN in Phase 4."""
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import patch
 
 from src.scheduler.pipeline import trigger_incremental_sync
@@ -17,5 +17,6 @@ class TestSchedulerPipeline:
     def test_schedule_uses_configured_interval(self, mock_settings):
         mock_settings.sync_interval_hours = 12
         from src.worker.celery_app import app
+
         beat_schedule = app.conf.beat_schedule
         assert "incremental-sync" in beat_schedule

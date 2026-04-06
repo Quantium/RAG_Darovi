@@ -27,7 +27,8 @@ class ConversationStore:
             raw = self._redis.get(f"conv:{conversation_id}")
             if not raw:
                 return []
-            turns = json.loads(raw)
+            payload = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            turns = json.loads(payload)
             return [ConversationTurn(**t) for t in turns]
         except Exception as exc:
             logger.warning("conversation.get_error", conversation_id=conversation_id, error=str(exc))

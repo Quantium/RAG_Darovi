@@ -2,12 +2,13 @@
 .git/
 .env
 credentials/
+certs/*.pem
+certs/*.key
 docker-data/
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-tests/
 plans/
 .DS_Store
 Thumbs.db

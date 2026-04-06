@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import redis
 import structlog
-from fastapi import FastAPI, Request, HTTPException, Depends, WebSocket
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import create_async_engine
+from starlette.requests import HTTPConnection
 
 from config.settings import Settings
 from src.logging import configure_logging
@@ -25,22 +27,20 @@ logger = structlog.get_logger()
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-from starlette.requests import HTTPConnection
-
 async def verify_api_key(request: HTTPConnection) -> None:
     """Middleware dependency: skip auth if API_KEY is not configured (dev mode)."""
     settings: Settings = request.app.state.settings
     configured_key = settings.api_key.get_secret_value()
     if not configured_key:
         return  # No key configured — auth disabled (dev mode)
-    
+
     api_key = request.headers.get("X-API-Key")
     if api_key != configured_key:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     settings = Settings()
     logger.info("app.startup", provider=settings.llm_provider)
@@ -88,11 +88,11 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
-    # Note: Dependencies are applied to the router or specific routes to allow 
+    # Note: Dependencies are applied to the router or specific routes to allow
     # the verify_api_key to access app.state.settings which is only populated after lifespan starts.
-    # But FastAPI doesn't allow Depends(verify_api_key) in create_app() to access state easily 
+    # But FastAPI doesn't allow Depends(verify_api_key) in create_app() to access state easily
     # before it's set. We'll handle auth in the router.
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -100,10 +100,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(router)
-    
+
     # Static files mounted AFTER router — routes take priority, static is fallback
     import os
+
     if os.path.exists("static"):
         app.mount("/", StaticFiles(directory="static", html=True), name="static")
-    
+
     return app

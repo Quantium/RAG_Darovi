@@ -22,20 +22,15 @@ def _build_messages(
     chunks: list[RetrievedChunk],
     history: list[ConversationTurn] | None = None,
 ) -> list[dict[str, str]]:
-    context = "\n\n".join(
-        f"[Source: {c.source_name} | Section: {c.section_title}]\n{c.text}"
-        for c in chunks
-    )
+    context = "\n\n".join(f"[Source: {c.source_name} | Section: {c.section_title}]\n{c.text}" for c in chunks)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
     if history:
         for turn in history:
             messages.append({"role": turn.role, "content": turn.content})
-    
-    messages.append(
-        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"}
-    )
+
+    messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"})
     return messages
 
 
@@ -50,11 +45,11 @@ async def rag_answer(
 ) -> tuple[str, list[RetrievedChunk]]:
     """Retrieve relevant chunks and generate a complete answer."""
     chunks = await retriever.retrieve(query, top_k=top_k, document_type=document_type)
-    
+
     history = None
     if conversation_store and conversation_id:
         history = conversation_store.get_history(conversation_id)
-        
+
     messages = _build_messages(query, chunks, history)
     answer = await llm.chat(messages)
 
@@ -81,13 +76,13 @@ async def rag_answer_stream(
     iterate the token_iterator to get the streamed answer.
     """
     chunks = await retriever.retrieve(query, top_k=top_k, document_type=document_type)
-    
+
     history = None
     if conversation_store and conversation_id:
         history = conversation_store.get_history(conversation_id)
-        
+
     messages = _build_messages(query, chunks, history)
     token_stream = llm.chat_stream(messages)
-    
+
     logger.info("rag.answer_stream_started", query_length=len(query), chunks=len(chunks))
     return token_stream, chunks

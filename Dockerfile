@@ -18,6 +18,9 @@ COPY --from=builder /install /usr/local
 WORKDIR /app
 COPY . .
 
+COPY docker-entrypoint-api.sh docker-healthcheck-api.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint-api.sh /usr/local/bin/docker-healthcheck-api.sh
+
 EXPOSE 8000
 
-CMD ["uvicorn", "src.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/usr/local/bin/docker-entrypoint-api.sh"]

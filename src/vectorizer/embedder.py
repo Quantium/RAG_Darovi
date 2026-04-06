@@ -59,25 +59,25 @@ class BatchEmbedder:
                 # Identify empty texts
                 empty_indices = [i for i, t in enumerate(texts) if not t.strip()]
                 non_empty_texts = [t for t in texts if t.strip()]
-                
+
                 if empty_indices:
                     logger.warning(
                         "embedding.empty_texts",
                         count=len(empty_indices),
                         indices=empty_indices[:5],  # log first 5
                     )
-                
+
                 # If all texts are empty, return zero vectors
                 if not non_empty_texts:
                     return [[0.0] * self._dim for _ in texts]
-                
+
                 response = await client.post(
                     f"{self._base_url}/api/embed",
                     json={"model": self._model, "input": non_empty_texts},
                 )
                 response.raise_for_status()
                 embeddings = response.json()["embeddings"]
-                
+
                 # Validation: Ollama should return same number of embeddings as non-empty inputs
                 if len(embeddings) != len(non_empty_texts):
                     logger.error(
@@ -88,7 +88,7 @@ class BatchEmbedder:
                     # Fill missing with zero vectors if necessary
                     while len(embeddings) < len(non_empty_texts):
                         embeddings.append([0.0] * self._dim)
-                
+
                 # Reconstruct full list with zero vectors for empty texts
                 full_embeddings: list[list[float]] = []
                 non_empty_idx = 0
@@ -98,13 +98,13 @@ class BatchEmbedder:
                     else:
                         full_embeddings.append(embeddings[non_empty_idx])
                         non_empty_idx += 1
-                
+
                 return full_embeddings
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
                 if attempt == max_retries - 1:
                     logger.error("embedding.failed", error=str(exc))
                     raise
-                
+
                 wait = 2**attempt
                 logger.warning(
                     "embedding.retry",
@@ -113,6 +113,6 @@ class BatchEmbedder:
                     error=str(exc),
                 )
                 await asyncio.sleep(wait)
-        
+
         # Unreachable but satisfies type checker
         return [[0.0] * self._dim for _ in texts]

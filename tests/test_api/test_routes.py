@@ -1,10 +1,10 @@
 """Tests for src/api/routes.py — turns GREEN in Phase 7."""
+
 from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import AsyncClient, ASGITransport
-from uuid import uuid4
 
 from src.api.app import create_app
 from config.settings import Settings
@@ -16,19 +16,19 @@ async def app_mocked(mock_milvus_client, mock_redis_client):
     # Mock dependencies in state to avoid real connections during tests
     app.state.settings = Settings()
     app.state.engine = AsyncMock()
-    
+
     mock_retriever = AsyncMock()
     mock_retriever.retrieve.return_value = []
     app.state.retriever = mock_retriever
-    
+
     mock_llm = AsyncMock()
     mock_llm.chat.return_value = "Mocked answer"
     mock_llm.chat_stream = AsyncMock()
     app.state.llm = mock_llm
-    
+
     app.state.conversation_store = MagicMock()
     app.state.conversation_store.get_history.return_value = []
-    
+
     return app
 
 
@@ -45,8 +45,11 @@ class TestAPIRoutes:
     @pytest.mark.integration
     async def test_chat_endpoint_includes_references(self, app_mocked):
         from src.rag.retriever import RetrievedChunk
+
         app_mocked.state.retriever.retrieve.return_value = [
-            RetrievedChunk(text="ref text", source_file_id="f1", source_name="n1", section_title="s1", chunk_index=0, score=0.9)
+            RetrievedChunk(
+                text="ref text", source_file_id="f1", source_name="n1", section_title="s1", chunk_index=0, score=0.9
+            )
         ]
         async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
             response = await client.post("/chat", json={"query": "What is revenue?"})
@@ -76,8 +79,8 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_generate_sql_endpoint(self, app_mocked):
-        with patch("redis.Redis.from_url") as mock_redis:
-            with patch("src.worker.tasks.run_sql_generation.delay") as mock_task:
+        with patch("redis.Redis.from_url"):
+            with patch("src.worker.tasks.run_sql_generation.delay"):
                 async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
                     response = await client.post("/generate-sql", json={"description": "invoices"})
                     assert response.status_code == 200
@@ -104,26 +107,26 @@ class TestAPIRoutes:
     @pytest.mark.integration
     async def test_websocket_chat(self, app_mocked):
         from fastapi.testclient import TestClient
-        
+
         # Setup streaming mock as a regular function returning an async generator
         async def mock_stream(*args, **kwargs):
             yield "token1"
             yield "token2"
-        
+
         # Use a regular MagicMock for chat_stream so it returns the generator directly
         app_mocked.state.llm.chat_stream = MagicMock(side_effect=mock_stream)
-        
+
         client = TestClient(app_mocked)
         with client.websocket_connect("/ws/chat") as ws:
             ws.send_json({"type": "query", "query": "Hello", "conversation_id": "test-conv"})
-            
+
             # Receive tokens
             msg1 = ws.receive_json()
             assert msg1["type"] == "token"
-            
+
             msg2 = ws.receive_json()
             assert msg2["type"] == "token"
-            
+
             # Receive done
             done = ws.receive_json()
             assert done["type"] == "done"

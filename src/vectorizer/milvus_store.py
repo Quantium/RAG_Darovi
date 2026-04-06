@@ -22,9 +22,7 @@ MILVUS_INSERT_BATCH_SIZE = 1000
 class VectorStore(Protocol):
     def create_collection(self) -> None: ...
     def upsert(self, chunks: list[dict], embeddings: list[list[float]]) -> None: ...
-    def search(
-        self, query_embedding: list[float], top_k: int, partition: str | None = None
-    ) -> list[dict]: ...
+    def search(self, query_embedding: list[float], top_k: int, partition: str | None = None) -> list[dict]: ...
     def delete_by_source(self, source_file_id: str) -> None: ...
     def collection_exists(self) -> bool: ...
 
@@ -36,7 +34,7 @@ class MilvusStore:
         self._host = settings.milvus_host
         self._port = settings.milvus_port
         self._client = client  # injected mock for tests
-        
+
         if client is None:
             connections.connect(host=self._host, port=self._port)
 
@@ -62,7 +60,7 @@ class MilvusStore:
             self._client.create_collection(self._collection_name, schema)
         else:
             col = Collection(self._collection_name, schema)
-            
+
             # Create HNSW index
             index_params = {
                 "metric_type": "COSINE",
@@ -70,13 +68,13 @@ class MilvusStore:
                 "params": {"M": 16, "efConstruction": 256},
             }
             col.create_index(field_name="embedding", index_params=index_params)
-            
+
             # Create partitions
             for part in ["doc", "sheet", "pdf"]:
                 col.create_partition(part)
-            
+
             col.load()
-        
+
         logger.info("milvus.collection_created", name=self._collection_name)
 
     def ensure_collection(self) -> None:
@@ -109,19 +107,17 @@ class MilvusStore:
             self._client.insert(self._collection_name, data, partition_name=partition_name)
         else:
             col = Collection(self._collection_name)
-            
+
             # Batch inserts in groups of 1000
             for i in range(0, len(chunks), MILVUS_INSERT_BATCH_SIZE):
                 batch_chunks_data = [col_data[i : i + MILVUS_INSERT_BATCH_SIZE] for col_data in data]
                 col.insert(batch_chunks_data, partition_name=partition_name)
-            
+
             col.flush()
-        
+
         logger.info("milvus.upserted", count=len(chunks), partition=partition_name)
 
-    def search(
-        self, query_embedding: list[float], top_k: int = 10, partition: str | None = None
-    ) -> list[dict]:
+    def search(self, query_embedding: list[float], top_k: int = 10, partition: str | None = None) -> list[dict]:
         search_params = {"metric_type": "COSINE", "params": {"ef": 128}}
         partition_names = [partition] if partition else None
 
@@ -149,14 +145,16 @@ class MilvusStore:
         output = []
         for hits in results:
             for hit in hits:
-                output.append({
-                    "id": hit.id,
-                    "source_file_id": hit.entity.get("source_file_id"),
-                    "source_name": hit.entity.get("source_name"),
-                    "section_title": hit.entity.get("section_title"),
-                    "text": hit.entity.get("text"),
-                    "score": hit.score,
-                })
+                output.append(
+                    {
+                        "id": hit.id,
+                        "source_file_id": hit.entity.get("source_file_id"),
+                        "source_name": hit.entity.get("source_name"),
+                        "section_title": hit.entity.get("section_title"),
+                        "text": hit.entity.get("text"),
+                        "score": hit.score,
+                    }
+                )
         return output
 
     def delete_by_source(self, source_file_id: str) -> None:
@@ -166,5 +164,5 @@ class MilvusStore:
         else:
             col = Collection(self._collection_name)
             col.delete(expr)
-        
+
         logger.info("milvus.deleted_source", source_file_id=source_file_id)

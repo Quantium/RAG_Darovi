@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import time
 from datetime import datetime
 from typing import Any
 
@@ -34,13 +33,13 @@ class DriveDownloader:
     async def full_sync(self) -> list[dict[str, Any]]:
         """Perform initial bootstrap scan of the configured folder."""
         logger.info("drive.full_sync.start", folder_id=self._settings.drive_folder_id)
-        
+
         files = []
         page_token = None
-        
+
         query = f"'{self._settings.drive_folder_id}' in parents"
         if not self._settings.drive_folder_id:
-             query = "trashed = false"
+            query = "trashed = false"
 
         while True:
             response = (
@@ -62,7 +61,7 @@ class DriveDownloader:
         token_resp = self._drive_service.changes().getStartPageToken().execute()
         start_token = token_resp.get("startPageToken")
         await self._metadata_repo.update_page_token(start_token)
-        
+
         logger.info("drive.full_sync.complete", count=len(files), start_token=start_token)
         return files
 
@@ -75,10 +74,10 @@ class DriveDownloader:
             return files, []
 
         logger.info("drive.incremental_sync.start", token=token)
-        
+
         changed_files = []
         deleted_ids = []
-        
+
         page_token = token
         while True:
             response = (
@@ -90,16 +89,16 @@ class DriveDownloader:
                 )
                 .execute()
             )
-            
+
             for change in response.get("changes", []):
                 file_id = change.get("fileId")
                 file_meta = change.get("file")
-                
+
                 if change.get("removed") or (file_meta and file_meta.get("trashed")):
                     deleted_ids.append(file_id)
                 elif file_meta:
                     changed_files.append(file_meta)
-            
+
             page_token = response.get("nextPageToken")
             if not page_token:
                 new_token = response.get("newStartPageToken")
@@ -116,35 +115,30 @@ class DriveDownloader:
         name = file_meta["name"]
         mime_type = file_meta["mimeType"]
         drive_modified_str = file_meta.get("modifiedTime")
-        
+
         # Check if already processed and unchanged
         existing = await self._metadata_repo.get_file(file_id)
         if existing and existing.drive_modified_at:
-             # Very basic comparison for now
-             current_modified_str = ""
-             if isinstance(existing.drive_modified_at, datetime):
-                 current_modified_str = existing.drive_modified_at.isoformat().replace("+00:00", "Z")
-             else:
-                 current_modified_str = str(existing.drive_modified_at)
-             
-             if current_modified_str == drive_modified_str:
-                 logger.debug("drive.download.skip_unchanged", file_id=file_id, name=name)
-                 return None
+            # Very basic comparison for now
+            current_modified_str = ""
+            if isinstance(existing.drive_modified_at, datetime):
+                current_modified_str = existing.drive_modified_at.isoformat().replace("+00:00", "Z")
+            else:
+                current_modified_str = str(existing.drive_modified_at)
+
+            if current_modified_str == drive_modified_str:
+                logger.debug("drive.download.skip_unchanged", file_id=file_id, name=name)
+                return None
 
         logger.info("drive.download.start", file_id=file_id, name=name)
-        
+
         try:
             content = await self._download_with_retry(file_id, mime_type)
-            
+
             # Upload to MinIO
             raw_key = f"{file_id}/{name}"
-            await asyncio.to_thread(
-                self._storage.upload, 
-                self._settings.minio_bucket_raw, 
-                raw_key, 
-                content
-            )
-            
+            await asyncio.to_thread(self._storage.upload, self._settings.minio_bucket_raw, raw_key, content)
+
             # Update metadata
             drive_modified_at = None
             if drive_modified_str:
@@ -152,15 +146,12 @@ class DriveDownloader:
                 drive_modified_at = datetime.fromisoformat(drive_modified_str.replace("Z", "+00:00"))
 
             await self._metadata_repo.upsert_file(
-                drive_file_id=file_id,
-                name=name,
-                mime_type=mime_type,
-                drive_modified_at=drive_modified_at
+                drive_file_id=file_id, name=name, mime_type=mime_type, drive_modified_at=drive_modified_at
             )
             await self._metadata_repo.update_status(file_id, "downloaded")
-            
+
             return raw_key
-            
+
         except Exception as e:
             logger.error("drive.download.error", file_id=file_id, error=str(e))
             # Optional: update status to failed
@@ -183,11 +174,11 @@ class DriveDownloader:
                 done = False
                 while not done:
                     status, done = await asyncio.to_thread(downloader.next_chunk)
-                
+
                 return fh.getvalue()
             except HttpError as e:
                 if e.resp.status == 429 and retries < max_retries:
-                    wait = 2 ** retries
+                    wait = 2**retries
                     logger.warning("drive.download.rate_limited", file_id=file_id, wait=wait)
                     await asyncio.sleep(wait)
                     retries += 1

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 
 from config.settings import Settings
 from src.logging import configure_logging
@@ -27,23 +26,37 @@ def main() -> None:
 
     if args.command == "serve":
         import uvicorn
-        uvicorn.run(
-            "src.api.app:create_app",
-            factory=True,
-            host=settings.api_host,
-            port=settings.api_port,
-        )
+
+        if settings.api_ssl_certfile and settings.api_ssl_keyfile:
+            uvicorn.run(
+                "src.api.app:create_app",
+                factory=True,
+                host=settings.api_host,
+                port=settings.api_port,
+                ssl_certfile=settings.api_ssl_certfile,
+                ssl_keyfile=settings.api_ssl_keyfile,
+            )
+        else:
+            uvicorn.run(
+                "src.api.app:create_app",
+                factory=True,
+                host=settings.api_host,
+                port=settings.api_port,
+            )
 
     elif args.command == "worker":
         from src.worker.celery_app import app
+
         app.worker_main(["worker", "--loglevel=info", "-Q", "download,convert,embed,default"])
 
     elif args.command == "beat":
         from src.worker.celery_app import app
+
         app.worker_main(["beat", "--loglevel=info"])
 
     elif args.command == "ingest":
         from src.worker.tasks import run_incremental_sync
+
         run_incremental_sync.delay()
         print("Ingestion dispatched. Monitor via `GET /status`.")
 

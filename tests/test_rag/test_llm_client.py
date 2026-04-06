@@ -1,4 +1,5 @@
 """Tests for src/rag/llm_client.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest

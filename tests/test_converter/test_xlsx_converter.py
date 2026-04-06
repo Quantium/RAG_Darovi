@@ -13,9 +13,11 @@ class TestXlsxConverter:
         mock_sheet.iter_rows.return_value = [("Header",), ("Value",)]
         mock_wb.worksheets = [mock_sheet]
         mock_load.return_value = mock_wb
-        
+
         converter = XlsxConverter()
-        text = converter.convert(b"fake", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        text = converter.convert(
+            b"fake", "test.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         assert "Sheet1" in text
         assert "Header" in text
         assert "Value" in text

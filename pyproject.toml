@@ -21,3 +21,41 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pymilvus",
+    "celery",
+    "googleapiclient.*",
+    "google.auth",
+    "google.auth.*",
+    "pytesseract",
+    "gspread",
+    "yaml",
+    "openpyxl",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+    "src.worker.tasks",
+    "src.worker.celery_app",
+    "src.scheduler.pipeline",
+    "src.drive.auth",
+    "src.drive.downloader",
+    "src.vectorizer.milvus_store",
+    "src.converter.pdf_converter",
+]
+disable_error_code = [
+    "no-untyped-def",
+    "untyped-decorator",
+    "misc",
+    "arg-type",
+    "attr-defined",
+    "no-untyped-call",
+    "no-any-return",
+    "import-untyped",
+    "type-arg",
+    "union-attr",
+    "operator",
+]

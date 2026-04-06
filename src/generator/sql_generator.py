@@ -35,7 +35,7 @@ class SQLGenerator:
         )
 
         response = await self._llm.chat([{"role": "user", "content": prompt}])
-        
+
         # Validation
         valid_statements = []
         for line in response.split(";"):
@@ -49,9 +49,7 @@ class SQLGenerator:
 
         return ";\n".join(valid_statements) + ";" if valid_statements else ""
 
-    async def extract_data(
-        self, chunks: list[RetrievedChunk], schema: str, batch_size: int = 10
-    ) -> list[str]:
+    async def extract_data(self, chunks: list[RetrievedChunk], schema: str, batch_size: int = 10) -> list[str]:
         """Extract structured data from chunks into INSERT statements."""
         all_inserts = []
         rejected_count = 0
@@ -68,7 +66,7 @@ class SQLGenerator:
             )
 
             response = await self._llm.chat([{"role": "user", "content": prompt}])
-            
+
             for line in response.split(";"):
                 stmt = line.strip()
                 if not stmt:
@@ -79,9 +77,7 @@ class SQLGenerator:
                     rejected_count += 1
                     logger.warning("sql_gen.rejected_data_statement", sql=stmt[:100])
 
-        logger.info(
-            "sql_gen.extracted", total_inserts=len(all_inserts), rejected=rejected_count
-        )
+        logger.info("sql_gen.extracted", total_inserts=len(all_inserts), rejected=rejected_count)
         return all_inserts
 
     @staticmethod
@@ -90,11 +86,11 @@ class SQLGenerator:
         # Strip comments
         clean_sql = re.sub(r"--.*", "", sql)
         stripped = clean_sql.strip().upper()
-        
+
         if not stripped:
             return False
 
         if FORBIDDEN_SQL_PATTERNS.search(stripped):
             return False
-        
+
         return any(stripped.startswith(prefix) for prefix in ALLOWED_SQL_PREFIXES)

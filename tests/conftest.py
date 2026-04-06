@@ -1,4 +1,5 @@
 """Shared test fixtures for the RAG pipeline."""
+
 from __future__ import annotations
 
 import pytest
@@ -16,6 +17,7 @@ def settings() -> Settings:
     return Settings(
         database_url=SecretStr("sqlite+aiosqlite:///test.db"),
         database_url_sync=SecretStr("sqlite:///test.db"),
+        database_url_generated=SecretStr("sqlite+aiosqlite:///test.db"),
         redis_broker_url="redis://localhost:6379/10",
         redis_result_url="redis://localhost:6379/11",
         redis_cache_url="redis://localhost:6379/12",

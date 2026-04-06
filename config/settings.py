@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     database_url_sync: SecretStr = SecretStr(
         "postgresql+psycopg2://postgres:postgres@localhost:5432/rag_darovi"
     )
+    # Async URL for LLM-generated SQL output (restricted `generated` schema in production)
+    database_url_generated: SecretStr = SecretStr(
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/rag_darovi"
+    )
 
     # Redis (isolated DBs: broker=0, results=1, cache=2)
     redis_broker_url: str = "redis://localhost:6379/0"
@@ -57,5 +61,9 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_key: SecretStr = SecretStr("")
+    # TLS for uvicorn (paths to PEM files). Both empty = HTTP only.
+    # In Docker, e.g. /etc/rag/certs/cert.pem and /etc/rag/certs/key.pem
+    api_ssl_certfile: str = ""
+    api_ssl_keyfile: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

@@ -1,8 +1,8 @@
 """Tests for src/rag/conversation.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest
-from unittest.mock import MagicMock
 
 from src.rag.conversation import ConversationStore
 

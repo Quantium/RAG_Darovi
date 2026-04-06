@@ -1,4 +1,5 @@
 """Tests for src/api/schemas.py — turns GREEN in Phase 7."""
+
 from __future__ import annotations
 
 import pytest
@@ -19,11 +20,16 @@ class TestAPISchemas:
     def test_chat_response_structure(self):
         resp = ChatResponse(
             answer="Revenue was $1.2M",
-            sources=[SourceReference(
-                source_file_id="f1", source_name="report.pdf",
-                section_title="Revenue", chunk_index=0,
-                text_preview="Total revenue...", score=0.95,
-            )],
+            sources=[
+                SourceReference(
+                    source_file_id="f1",
+                    source_name="report.pdf",
+                    section_title="Revenue",
+                    chunk_index=0,
+                    text_preview="Total revenue...",
+                    score=0.95,
+                )
+            ],
             conversation_id="conv-123",
         )
         assert resp.answer == "Revenue was $1.2M"

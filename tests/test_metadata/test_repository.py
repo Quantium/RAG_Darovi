@@ -1,7 +1,7 @@
 """Tests for src/metadata/repository.py — turns GREEN in Phase 3."""
+
 from __future__ import annotations
 
-import pytest
 
 from src.metadata.repository import MetadataRepository
 
@@ -9,9 +9,7 @@ from src.metadata.repository import MetadataRepository
 class TestMetadataRepository:
     async def test_create_file_record(self, db_session):
         repo = MetadataRepository(db_session)
-        record = await repo.create_file_record(
-            drive_file_id="abc123", name="test.pdf", mime_type="application/pdf"
-        )
+        record = await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         assert record.status == "pending"
         assert record.drive_file_id == "abc123"
 

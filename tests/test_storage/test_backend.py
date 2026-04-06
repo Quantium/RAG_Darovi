@@ -1,8 +1,7 @@
 """Tests for src/storage/backend.py — turns GREEN in Phase 3."""
+
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock, patch
 
 from src.storage.backend import MinIOStorage, LocalStorage
 

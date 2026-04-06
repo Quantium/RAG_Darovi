@@ -20,7 +20,7 @@ class SheetsWriter:
 
         try:
             spreadsheet = self._gc.open_by_key(spreadsheet_id)
-            
+
             try:
                 worksheet = spreadsheet.worksheet(sheet_name)
             except gspread.WorksheetNotFound:

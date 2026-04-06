@@ -13,9 +13,11 @@ class TestDocxConverter:
         mock_doc.paragraphs = [mock_para]
         mock_doc.tables = []
         mock_doc_cls.return_value = mock_doc
-        
+
         converter = DocxConverter()
-        text = converter.convert(b"fake", "test.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        text = converter.convert(
+            b"fake", "test.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
         assert "Hello" in text
 
     @patch("src.converter.docx_converter.docx.Document")
@@ -27,7 +29,9 @@ class TestDocxConverter:
         mock_doc.paragraphs = [mock_para]
         mock_doc.tables = []
         mock_doc_cls.return_value = mock_doc
-        
+
         converter = DocxConverter()
-        text = converter.convert(b"fake", "test.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        text = converter.convert(
+            b"fake", "test.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
         assert "# Title" in text

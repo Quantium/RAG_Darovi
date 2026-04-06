@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import structlog
 from celery import Celery, Task
 from config.settings import Settings
@@ -61,6 +60,7 @@ class RetryableTask(Task):
         )
         try:
             from src.worker.task_helpers import build_metadata_repo
+
             repo, cleanup = build_metadata_repo()
             repo.update_status(drive_file_id, "failed", error_message=str(exc))
             cleanup()

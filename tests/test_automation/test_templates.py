@@ -1,4 +1,5 @@
 """Tests for src/automation/templates.py — turns GREEN in Phase 6."""
+
 from __future__ import annotations
 
 import pytest
@@ -30,6 +31,7 @@ action:
 
     def test_filter_matches_file(self):
         from src.automation.templates import AutomationFilter
+
         f = AutomationFilter(mime_type="application/pdf", name_pattern="invoice_*")
         assert matches_file(f, {"mimeType": "application/pdf", "name": "invoice_001.pdf"}) is True
         assert matches_file(f, {"mimeType": "text/plain", "name": "readme.txt"}) is False

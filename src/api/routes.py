@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from typing import cast
 from uuid import uuid4
 
 import redis
@@ -88,7 +88,7 @@ async def ws_chat(websocket: WebSocket) -> None:
                     conversation_store=conversation_store,
                     conversation_id=conversation_id,
                 )
-                
+
                 full_answer = []
                 async for token in token_stream:
                     full_answer.append(token)
@@ -98,19 +98,14 @@ async def ws_chat(websocket: WebSocket) -> None:
                 conversation_store.append(conversation_id, "user", query)
                 conversation_store.append(conversation_id, "assistant", "".join(full_answer))
 
-                sources = [asdict(c) for c in chunks]
-                # Convert RetrievedChunk objects to dict if not already
-                from dataclasses import asdict
                 serializable_sources = []
                 for c in chunks:
                     source = _chunk_to_source(c)
                     serializable_sources.append(source.model_dump())
 
-                await websocket.send_json({
-                    "type": "done", 
-                    "sources": serializable_sources, 
-                    "conversation_id": conversation_id
-                })
+                await websocket.send_json(
+                    {"type": "done", "sources": serializable_sources, "conversation_id": conversation_id}
+                )
 
             except Exception as exc:
                 logger.error("ws.query_error", error=str(exc))
@@ -129,6 +124,7 @@ async def generate_sql(request: Request, body: GenerateSQLRequest) -> GenerateSQ
     r.hset(f"sql_job:{job_id}", mapping={"status": "pending", "description": body.description})
 
     from src.worker.tasks import run_sql_generation
+
     run_sql_generation.delay(job_id, body.description, body.target_db)
 
     return GenerateSQLResponse(job_id=job_id, status="pending")
@@ -137,7 +133,7 @@ async def generate_sql(request: Request, body: GenerateSQLRequest) -> GenerateSQ
 @router.get("/generate-sql/{job_id}", response_model=GenerateSQLResponse)
 async def get_sql_job(request: Request, job_id: str) -> GenerateSQLResponse:
     r = redis.Redis.from_url(request.app.state.settings.redis_cache_url)
-    job = r.hgetall(f"sql_job:{job_id}")
+    job = cast(dict[bytes, bytes], r.hgetall(f"sql_job:{job_id}"))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -173,7 +169,7 @@ async def get_status(request: Request) -> StatusResponse:
         if f.status in counts:
             counts[f.status] += 1
         else:
-            counts["pending"] += 1 # Default
+            counts["pending"] += 1  # Default
 
     return StatusResponse(
         total_files=len(files),
@@ -181,7 +177,7 @@ async def get_status(request: Request) -> StatusResponse:
         downloaded=counts["downloaded"],
         converted=counts["converted"],
         embedded=counts["embedded"],
-        failed=counts["failed"]
+        failed=counts["failed"],
     )
 
 

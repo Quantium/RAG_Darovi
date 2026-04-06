@@ -1,7 +1,7 @@
 """Tests for config/settings.py — turns GREEN in Phase 1."""
+
 from __future__ import annotations
 
-import os
 import pytest
 from pydantic import SecretStr, ValidationError
 
@@ -14,6 +14,8 @@ class TestSettings:
         assert s.milvus_port == 19530
         assert s.embed_model == "nomic-embed-text"
         assert s.embed_dim == 768
+        assert s.api_ssl_certfile == ""
+        assert s.api_ssl_keyfile == ""
 
     def test_settings_reads_env_vars(self, monkeypatch):
         monkeypatch.setenv("MILVUS_PORT", "29530")
