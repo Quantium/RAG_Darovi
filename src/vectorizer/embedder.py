@@ -13,8 +13,10 @@ logger = structlog.get_logger()
 
 
 class BatchEmbedder:
+    """Ollama embeddings via /api/embed (batch). Falls back to /api/embeddings on 404 (Ollama before 0.3.4)."""
+
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        self._base_url = settings.ollama_base_url
+        self._base_url = settings.ollama_base_url.rstrip("/")
         self._model = settings.embed_model
         self._batch_size = settings.embed_batch_size
         self._dim = settings.embed_dim
@@ -51,6 +53,23 @@ class BatchEmbedder:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 yield client
 
+    async def _embed_legacy_parallel(self, client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
+        """Legacy Ollama: POST /api/embeddings with one prompt per request (no batch)."""
+
+        async def fetch_one(prompt: str) -> list[float]:
+            r = await client.post(
+                f"{self._base_url}/api/embeddings",
+                json={"model": self._model, "prompt": prompt},
+            )
+            r.raise_for_status()
+            data = r.json()
+            emb = data.get("embedding")
+            if not isinstance(emb, list):
+                raise ValueError("Ollama /api/embeddings response missing 'embedding' array")
+            return emb
+
+        return list(await asyncio.gather(*[fetch_one(t) for t in texts]))
+
     async def _embed_batch(
         self, client: httpx.AsyncClient, texts: list[str], max_retries: int = 3
     ) -> list[list[float]]:
@@ -75,8 +94,15 @@ class BatchEmbedder:
                     f"{self._base_url}/api/embed",
                     json={"model": self._model, "input": non_empty_texts},
                 )
-                response.raise_for_status()
-                embeddings = response.json()["embeddings"]
+                if response.status_code == 404:
+                    logger.warning(
+                        "embedding.api_embed_404",
+                        hint="Falling back to /api/embeddings (upgrade Ollama to >= 0.3.4 for /api/embed).",
+                    )
+                    embeddings = await self._embed_legacy_parallel(client, non_empty_texts)
+                else:
+                    response.raise_for_status()
+                    embeddings = response.json()["embeddings"]
 
                 # Validation: Ollama should return same number of embeddings as non-empty inputs
                 if len(embeddings) != len(non_empty_texts):

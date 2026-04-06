@@ -1,159 +1,158 @@
-# AGENTS.md — AI Agent Build Guide
+# AGENTS.md — AI Agent Guide
 
-## Project Overview
+This file is the **canonical project briefing** for coding agents and LLMs. Read it before changing behavior, adding features, or debugging.
 
-RAG pipeline application: terabyte-scale document ingestion from Google Drive, vectorization via Ollama, and LLM-powered Q&A with source citations and multi-turn conversation memory. Built with Python 3.11, FastAPI, Celery, Milvus, PostgreSQL, MinIO, and Redis (isolated DBs).
+---
+
+## What This Project Is
+
+**RAG_Darovi** is a **retrieval-augmented generation (RAG) platform** that:
+
+1. **Ingests documents** from **Google Drive** (full and incremental sync), stores raw and converted text in **object storage**, and tracks file metadata in **PostgreSQL**.
+2. **Chunks** text, **embeds** chunks with **Ollama**, and **indexes** vectors in **Milvus** for semantic search.
+3. **Answers user questions** via a **FastAPI** backend and **chat UI**: retrieves relevant chunks, calls an **OpenAI-compatible LLM** (Ollama, Gemini, DeepSeek, etc.), returns **answers with source citations**, and keeps **multi-turn conversation memory** in **Redis**.
+4. **Runs the pipeline asynchronously** with **Celery** (download → convert → embed queues), **Celery Beat** for scheduled syncs, and a **distributed Redis lock** so only one incremental sync runs at a time.
+5. **Optional generators**: LLM-assisted **SQL** (validated, executed on a restricted DB user / `generated` schema), **Google Sheets** writes, and **YAML-driven automations**.
+
+**Scale intent:** designed for large corpora (many files); batching is used for embeddings and vector inserts.
+
+**Stack:** Python 3.11+, FastAPI, Celery, Milvus, PostgreSQL, MinIO, Redis (isolated logical DBs), Ollama for embeddings and optional local LLM.
+
+---
+
+## End-to-End Behavior (Mental Model)
+
+| Stage | Responsibility |
+|--------|----------------|
+| **Sync** | List changes on Drive; detect new/changed/deleted files; update metadata rows. |
+| **Download** | Fetch file bytes; store in MinIO (raw). |
+| **Convert** | MIME-based converters (PDF, Docs, Sheets, Docx, Xlsx, text, …) → normalized text in MinIO. |
+| **Chunk + embed** | Token-aware chunking (`tiktoken`); `BatchEmbedder` calls Ollama (`/api/embed`, with fallback to legacy `/api/embeddings` on 404); vectors stored in Milvus keyed by source/chunk. |
+| **Delete path** | If a Drive file disappears, **delete_file_vectors** removes Milvus rows, MinIO objects, and related PostgreSQL metadata so nothing stays stale. |
+| **Query** | User message → embed query (or retriever path) → Milvus similarity search → optional Redis cache → assemble context → LLM → stream or JSON response with **sources** (file/chunk references). |
+| **Memory** | `conversation_id` ties turns; history lives in Redis (cache DB), not only in the browser. |
+
+---
+
+## Data Flow (Compressed)
+
+```
+Google Drive
+    → Celery Beat (+ distributed lock) → full_sync / incremental_sync
+        → download_file → MinIO (raw)
+        → convert_file → MinIO (text)
+        → embed_file → Ollama embeddings → Milvus (HNSW, cosine)
+    Deleted on Drive → delete_file_vectors → Milvus + MinIO + PostgreSQL
+
+User (HTTP/WebSocket)
+    → FastAPI → Retriever → LLM (+ ConversationStore)
+    → Answer + cited sources; WebSocket streams tokens where applicable
+```
+
+---
+
+## Repository Layout (What Lives Where)
+
+```
+├── config/settings.py       # Single Pydantic Settings; no raw os.environ in modules
+├── src/
+│   ├── main.py              # CLI: serve | worker | beat | ingest | query
+│   ├── logging.py           # structlog
+│   ├── drive/               # Drive auth (readonly), full_sync, incremental_sync, deletion detection
+│   ├── storage/             # MinIO + local fallback (StorageBackend protocol)
+│   ├── converter/           # FileConverter protocol, PDF/Docs/Sheets/Docx/Xlsx/Text + factory
+│   ├── vectorizer/          # Chunker, BatchEmbedder, MilvusStore
+│   ├── metadata/            # PostgreSQL: async repo (FastAPI) + sync repo (Celery)
+│   ├── worker/              # Celery app, RetryableTask, tasks, sync DB helpers
+│   ├── scheduler/           # Beat pipeline, distributed lock
+│   ├── rag/                 # Retriever, LLM client, ConversationStore, RAG chain
+│   ├── generator/         # SQLGenerator (+ safety), DBWriter, SheetsWriter
+│   ├── automation/        # Engine + YAML templates
+│   └── api/                 # FastAPI factory, routes, schemas, API key middleware
+├── static/                  # Chatbot SPA (vanilla JS)
+├── tests/                   # Mirrors src/ with test_ prefix
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── requirements-dev.txt
+```
+
+---
+
+## Infrastructure (Docker Compose)
+
+| Service | Port | Role |
+|---------|------|------|
+| **Redis** | 6379 | DB 0: Celery broker; DB 1: results; DB 2: retriever cache + conversation memory |
+| **PostgreSQL** | 5432 | App metadata (`public`) + LLM-generated SQL output (`generated` + restricted user) |
+| **Milvus** | 19530 | Vector index (e.g. HNSW, cosine) |
+| **MinIO** | 9000/9001 | Blobs: raw uploads + converted text |
+| **Ollama** | 11434 | Embeddings and/or local chat model (`/api/embed`; older servers use `/api/embeddings` fallback) |
+
+---
+
+## Configuration
+
+- **Single source of truth:** `config/settings.py` (`Settings`), injected everywhere.
+- **Precedence:** environment variables > `.env` > defaults. Use `SecretStr` for secrets.
+- **Notable keys:** `database_url` / `database_url_sync` (Celery uses sync URL), isolated Redis URLs, `ollama_base_url`, embed/chat model names, `api_key` (empty disables auth), MinIO/Milvus hosts, optional `google_sheets_credentials` for Sheets writes.
+
+---
+
+## Architectural Patterns (Use Them, Do Not Fight Them)
+
+| Pattern | Where | Why |
+|---------|--------|-----|
+| **Protocol** | `StorageBackend`, `FileConverter`, `LLMClient`, `VectorStore` | Testability + swap implementations |
+| **Factory** | `get_converter`, `create_llm_client` | Add types without editing all call sites |
+| **Chain** | Celery `download → convert → embed` | Scale stages independently |
+| **Circuit breaker** | LLM client | Fail fast when upstream is unhealthy |
+| **Repository** | Async + sync metadata repos | Same DB rules; Celery stays sync |
+| **Distributed lock** | Incremental sync | No overlapping full/incremental runs |
+| **Defense in depth** | SQL whitelist + restricted role + `generated` schema | LLM cannot destroy pipeline tables |
+
+---
 
 ## Mandatory Principles
 
-### TDD (Red-Green-Refactor)
+### TDD (Red–Green–Refactor)
 
-1. **RED** — Write failing tests first (Phase 2 defines all test stubs).
-2. **GREEN** — Implement minimum code to pass tests.
-3. **REFACTOR** — Clean up while keeping tests green.
-4. **ENVIRONMENT** - The project must run using Docker everytime, the dependencies must be installed just in a controled environment using venv
+1. **RED** — Add or extend a failing test that specifies the behavior.
+2. **GREEN** — Implement the minimum code to pass.
+3. **REFACTOR** — Clean up; keep tests green.
 
-Never skip a failing test to start the next step. Run `pytest` after every implementation change.
+Run `pytest` after substantive changes. Do not skip failing tests to “move on.”
 
 ### SOLID
 
-- **Single Responsibility**: One concern per module.
-- **Open/Closed**: `FileConverter` protocol — add converters without modifying existing ones.
-- **Liskov Substitution**: All converters interchangeable behind the protocol.
-- **Interface Segregation**: Minimal surfaces for Storage, LLM, and DB interfaces.
-- **Dependency Inversion**: Depend on abstractions (Protocols), not concrete implementations. All services accept injected dependencies for testability.
+- **S**ingle responsibility per module.
+- **O**pen/closed: extend via protocols/factories (e.g. new `FileConverter` without editing others).
+- **L**iskov: implementations must honor protocol contracts.
+- **I**nterface segregation: small Storage/LLM/DB surfaces.
+- **D**ependency inversion: inject abstractions in constructors; no hidden globals.
 
 ### Code Quality
 
-- Python 3.11+ type hints on all public functions.
-- Pydantic validation for all config and API schemas.
-- `ruff check` + `ruff format` + `mypy --strict` must pass.
-- `async/await` for all I/O-bound operations.
-- `structlog` with `request_id`, `file_id`, `task_name` for structured logging.
-- Exponential backoff retries (max 5), circuit breakers for external APIs.
-- All documentation and test names in English.
+- Python 3.11+ type hints on public APIs; Pydantic for config and API bodies.
+- `ruff check` + `ruff format` + `mypy --strict` on touched code paths.
+- `async/await` for I/O; structured logging (`structlog`) with `request_id`, `file_id`, `task_name` where relevant.
+- Retries with backoff and circuit breakers for external services.
+- **All documentation and test names in English.**
 
-## Configuration Strategy
+### Environment
 
-All modules read from a single `Settings` instance (`config/settings.py`) via Pydantic Settings. Override chain: **env vars > `.env` file > code defaults**. No module reads `os.environ` directly — always inject `Settings`. Sensitive fields use `SecretStr`.
+- Prefer **Docker Compose** for full stack parity; use a **venv** for local Python tooling and `pip install -r requirements-dev.txt`.
 
-Key settings additions:
-- `database_url_sync` — sync `psycopg2` URL for Celery tasks (avoids async event loop issues).
-- `redis_broker_url` / `redis_result_url` / `redis_cache_url` — isolated Redis DBs (0/1/2).
-- `api_key` — optional API key for endpoint auth (empty = disabled).
-- `google_sheets_credentials` — separate credentials path for Sheets write scope.
-
-## Project Structure
-
-```
-RAG_Darovi_test/
-├── config/settings.py          # Pydantic Settings (single source of truth)
-├── src/
-│   ├── main.py                 # CLI: serve | worker | beat | ingest | query
-│   ├── logging.py              # structlog configuration
-│   ├── drive/                  # Google Drive auth (readonly) + full_sync + incremental_sync (with deletion detection)
-│   ├── storage/                # MinIO + local fallback (StorageBackend protocol)
-│   ├── converter/              # FileConverter protocol + PDF/Docs/Sheets/Docx/Xlsx/Text impls + factory
-│   ├── vectorizer/             # Chunker (tiktoken), BatchEmbedder, MilvusStore
-│   ├── metadata/               # PostgreSQL repository — both async (AsyncSession) and sync (Session) variants
-│   ├── worker/                 # Celery app, RetryableTask, tasks (incl. delete_file_vectors), sync helpers
-│   ├── scheduler/              # Celery Beat pipeline (with distributed lock)
-│   ├── rag/                    # Retriever, LLMClient, ConversationStore, RAG chain
-│   ├── generator/              # SQLGenerator (with SQL safety validation), DBWriter (restricted schema), SheetsWriter
-│   ├── automation/             # Engine + YAML templates
-│   └── api/                    # FastAPI app factory (with API key auth), routes, schemas
-├── static/                     # Chatbot SPA (index.html, styles.css, app.js)
-├── tests/                      # Mirrors src/ structure with test_ prefix
-├── docker-compose.yml          # Redis, PostgreSQL, Milvus, MinIO, Ollama, app services
-├── Dockerfile                  # Multi-stage build (prod deps only)
-├── requirements.txt            # Production deps
-├── requirements-dev.txt        # Dev/test deps (extends production)
-└── plans/                      # Detailed phase plans (read-only reference)
-```
-
-## Build Phases (Execute in Order)
-
-Each phase depends on the previous. Detailed plans live in `plans/PLAN_0N_*.md`. Always read the relevant plan file before starting a phase.
-
-### Phase 1 — Setup & Infrastructure
-**Plan**: `plans/PLAN_01_SETUP.md`
-**Builds**: venv, deps (incl. `python-docx`, `openpyxl`, `beautifulsoup4`, `tiktoken`), `config/settings.py` (with `database_url_sync`, isolated Redis URLs, `api_key`), directory scaffold, `.env.example`, `.gitignore`, `.dockerignore`, `Dockerfile`, `docker-compose.yml`, `Makefile`
-**Success**: `docker compose up -d` healthy; `from config.settings import Settings` works; `import src` works.
-
-### Phase 2 — TDD Test Stubs (RED)
-**Plan**: `plans/PLAN_02_TDD_TESTS.md`
-**Builds**: `pyproject.toml`, `tests/conftest.py` (fixtures with isolated Redis DBs, mocks), all test files across every module. Includes tests for: full_sync, deletion detection, new converters, conversation memory, SQL safety, API key auth. `test_embed_task_calls_embedder` marked `xfail` until Phase 5.
-**Success**: `pytest --collect-only` finds all tests; `pytest` runs and all fail with `ImportError` or `NotImplementedError` (xfail tests expected to fail).
-
-### Phase 3 — Download & Conversion
-**Plan**: `plans/PLAN_03_DOWNLOAD_CONVERT.md`
-**Builds**: `StorageBackend` protocol + `MinIOStorage` + `LocalStorage`, `MetadataRepository` (async) + `SyncMetadataRepository` (sync for Celery), `DriveAuth` (readonly scope), `DriveDownloader` (`full_sync` + `incremental_sync` with deletion detection), `FileConverter` protocol + PDF/Docs/Sheets/Docx/Xlsx/Text converters + factory, `DocumentChunker` (with `tiktoken`), `structlog` setup.
-**Parallelizable**: Storage and Metadata are independent. Converters are independent of Drive modules. Chunker is independent.
-**Success**: `pytest tests/test_storage/ tests/test_metadata/ tests/test_drive/ tests/test_converter/ tests/test_vectorizer/test_chunker.py -v` all GREEN.
-
-### Phase 4 — Celery Workers & Scheduler
-**Plan**: `plans/PLAN_04_CRON_SYNC.md`
-**Builds**: `celery_app.py` (config with isolated Redis DBs, `RetryableTask` with sync `on_failure`, beat schedule), `task_helpers.py` (using sync `psycopg2` sessions), `tasks.py` (download, convert with unsupported MIME handling, embed placeholder, `delete_file_vectors`, chain dispatch), `scheduler/pipeline.py` with distributed Redis lock.
-**Key**: Three queues (`download`, `convert`, `embed`). `embed_file` stays as `NotImplementedError` placeholder. Distributed lock prevents concurrent syncs. Deletion tasks clean up Milvus + MinIO + PG.
-**Success**: `pytest tests/test_worker/ tests/test_scheduler/ -v` GREEN (embed test `xfail`).
-
-### Phase 5 — Embedding & Vector Storage
-**Plan**: `plans/PLAN_05_EMBEDDING.md`
-**Builds**: `BatchEmbedder` (httpx + Ollama `/api/embed`), `MilvusStore` (HNSW index, COSINE metric, partitions), completes `embed_file` task.
-**Key**: Batch embed (64 texts), batch Milvus insert (1000 vectors). `delete_by_source` before re-upsert for modified files.
-**Success**: `pytest tests/test_vectorizer/ tests/test_worker/ -v` all GREEN.
-
-### Phase 6 — LLM, RAG, Generators, Automations
-**Plan**: `plans/PLAN_06_LLM.md`
-**Builds**: `Retriever` (semantic search + Redis cache on DB 2), `OpenAICompatibleLLMClient` (Ollama/Gemini/DeepSeek via factory + circuit breaker), `ConversationStore` (Redis-backed multi-turn memory), `rag_answer()` + `rag_answer_stream()` (with conversation history), `SQLGenerator` (with SQL safety whitelist/validation), `DBWriter` (restricted `rag_generator` user on `generated` schema), `SheetsWriter` (with `spreadsheets` scope), `AutomationConfig` templates + `AutomationEngine`.
-**Parallelizable**: Retriever, LLM Client, and Conversation Store are independent. Generators depend on Retriever + LLM. Automation depends on generators.
-**Success**: `pytest tests/test_rag/ tests/test_generator/ tests/test_automation/ -v` all GREEN.
-
-### Phase 7 — FastAPI + Chatbot UI
-**Plan**: `plans/PLAN_07_UI_CHATBOT.md`
-**Builds**: API schemas, FastAPI app factory (lifespan wires all services + `ConversationStore` + API key auth middleware), REST + WebSocket routes (with conversation memory), CLI entry point (`argparse`), chatbot SPA (vanilla JS, WebSocket streaming with `conversation_id`, dark/light theme, source reference cards, API key support).
-**Key**: Routes use `rag_answer`/`rag_answer_stream` from Phase 6 — no logic duplication. API key auth optional (disabled when `API_KEY` is empty). Static files mounted after router.
-**Success**: `pytest -v` → 100% pass. UI at `http://localhost:8000` streams answers with sources and maintains conversation context.
-
-## Infrastructure Services (Docker Compose)
-
-| Service | Image | Port | Purpose |
-|---|---|---|---|
-| Redis | `redis:7-alpine` | 6379 | DB 0: Celery broker, DB 1: result backend, DB 2: cache + conversation memory |
-| PostgreSQL | `postgres:16-alpine` | 5432 | Metadata DB (`public` schema) + generated SQL output (`generated` schema with restricted user) |
-| Milvus | `milvusdb/milvus:v2.4-latest` | 19530 | Vector DB with HNSW index |
-| MinIO | `minio/minio` | 9000/9001 | Object storage (raw files + converted text) |
-| Ollama | `ollama/ollama` | 11434 | Embeddings (`nomic-embed-text`) + local LLM (`llama3`) |
-
-## Data Flow
-
-```
-Google Drive → Celery Beat (distributed lock) → full_sync / incremental_sync
-    Changed files → download_file → MinIO (raw) → convert_file → MinIO (text)
-        → embed_file → Ollama (768-dim vectors) → Milvus (HNSW)
-    Deleted files → delete_file_vectors → Milvus + MinIO + PostgreSQL cleanup
-    → User Query → Retriever → LLM (with conversation memory) → Answer + Source Citations
-```
-
-## Key Architectural Patterns
-
-| Pattern | Where | Why |
-|---|---|---|
-| Protocol (structural typing) | `StorageBackend`, `FileConverter`, `LLMClient`, `VectorStore` | DI + testability without ABC overhead |
-| Factory | `get_converter(mime_type)`, `create_llm_client(settings)` | Open/Closed — add types without modifying callers |
-| Strategy | LLM providers via `OpenAICompatibleLLMClient` | Single impl, config-driven provider swap |
-| Chain of Responsibility | Celery `download → convert → embed` | Decoupled pipeline stages, independent scaling |
-| Circuit Breaker | `LLMClient._check_circuit()` | Prevent cascading failures on external APIs |
-| Repository | `MetadataRepository` (async) + `SyncMetadataRepository` (sync) | Isolate DB access; sync variant for Celery, async for FastAPI |
-| Distributed Lock | Redis `SET NX` in `run_incremental_sync` | Prevent concurrent syncs from overlapping |
-| Defense in Depth | SQL whitelist + restricted DB user + isolated schema | LLM-generated SQL cannot damage pipeline data |
+---
 
 ## Testing Conventions
 
-- **Unit tests**: Mock external deps (MinIO, Drive, Ollama, Milvus, Redis). Use DI constructor params.
-- **Integration tests**: Mark with `@pytest.mark.integration`. Require Docker services.
-- **Async tests**: `asyncio_mode = "auto"` in pyproject.toml. Use `async def test_*`.
-- **Fixtures**: Shared in `tests/conftest.py` — `settings`, `db_session`, `mock_minio_client`, `mock_drive_service`, `mock_ollama_client`, `mock_httpx_client`, `mock_milvus_client`, `mock_redis_client`, `sample_pdf_bytes`, `sample_text`.
+- **Unit tests:** mock MinIO, Drive, Ollama, Milvus, Redis; pass mocks via DI.
+- **Integration:** `@pytest.mark.integration` when real Docker services are required.
+- **Async:** `async def` tests; `asyncio_mode = "auto"` in `pyproject.toml`.
+- **Fixtures:** `tests/conftest.py` — `settings`, `db_session`, mocks for external services, sample payloads.
+
+---
 
 ## Common Commands
 
@@ -168,17 +167,22 @@ make typecheck   # mypy --strict src/
 make clean       # docker compose down -v + remove __pycache__
 ```
 
-## Definition of Done
+---
 
-- `pytest -v` passes 100% (no skipped, no xfail).
-- `mypy --strict src/` reports zero errors.
-- `ruff check src/ tests/` and `ruff format --check src/ tests/` report zero issues.
-- `docker compose up -d` starts all services healthy.
-- First run performs full Drive scan; subsequent runs use incremental sync with distributed lock.
-- Deleted Drive files trigger automatic cleanup of vectors, objects, and metadata.
-- Celery Beat triggers automatic incremental sync on schedule.
-- Chatbot UI at `http://localhost:8000` streams answers via WebSocket with source references and multi-turn conversation context.
-- API endpoints protected by `X-API-Key` when configured.
-- LLM-generated SQL validated via whitelist and executed under restricted DB user on isolated schema.
-- `GET /status` returns accurate pipeline progress.
-- Modified Drive files are automatically re-downloaded, re-converted, and re-indexed without stale vectors.
+## Definition of Done (Feature / Change)
+
+- `pytest -v` green (no unintended skips/xfails).
+- `mypy --strict src/` clean for changed modules.
+- `ruff` clean.
+- New behavior covered by tests where risk is non-trivial.
+- Settings and secrets follow the existing `Settings` pattern; no new direct `os.environ` reads in library code.
+
+---
+
+## Operational Expectations (When Verifying the Whole System)
+
+- `docker compose up -d` leaves all declared services healthy.
+- Drive sync: first run can full-scan; later runs incremental; lock prevents concurrent sync races.
+- Deleted Drive files trigger vector + object + metadata cleanup.
+- Chat UI can stream answers and show sources; optional `X-API-Key` when `API_KEY` is set.
+- `GET /status` reflects pipeline state where implemented.

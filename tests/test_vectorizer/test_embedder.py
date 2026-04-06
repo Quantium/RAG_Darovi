@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from src.vectorizer.embedder import BatchEmbedder
 
@@ -42,3 +42,25 @@ class TestBatchEmbedder:
         embedder = BatchEmbedder(settings, client=mock_httpx_client)
         vectors = await embedder.embed_texts(["retry test"])
         assert len(vectors) == 1
+
+    async def test_fallback_to_legacy_on_api_embed_404(self, settings, mock_httpx_client):
+        """Ollama before 0.3.4 returns 404 on /api/embed; use /api/embeddings per text."""
+
+        def post_impl(url: str, **kwargs: object) -> MagicMock:
+            if str(url).rstrip("/").endswith("/api/embed"):
+                r = MagicMock()
+                r.status_code = 404
+                return r
+            if str(url).rstrip("/").endswith("/api/embeddings"):
+                r = MagicMock()
+                r.status_code = 200
+                r.json.return_value = {"embedding": [0.1] * 768}
+                r.raise_for_status = MagicMock()
+                return r
+            raise AssertionError(f"unexpected URL: {url}")
+
+        mock_httpx_client.post.side_effect = post_impl
+        embedder = BatchEmbedder(settings, client=mock_httpx_client)
+        vectors = await embedder.embed_texts(["Hello world"])
+        assert len(vectors) == 1
+        assert len(vectors[0]) == 768
