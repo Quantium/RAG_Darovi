@@ -21,7 +21,7 @@ const state = {
     documentType: "",
     messages: [],
     apiKey: localStorage.getItem("rag_api_key") || "",
-    theme: localStorage.getItem("rag_theme") || "light",
+    theme: localStorage.getItem("rag_theme") || "dark",
 };
 
 // UI Elements
