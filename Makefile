@@ -1,4 +1,4 @@
-.PHONY: up down test lint format install clean typecheck docker-build docker-qa tls-certs
+.PHONY: up down test lint format install clean typecheck docker-build docker-qa tls-certs e2e
 
 install:
 	pip install -r requirements-dev.txt
@@ -21,6 +21,9 @@ down:
 
 test:
 	pytest -v --tb=short
+
+e2e:
+	cd e2e && npm ci && npx playwright install chromium && npm run test:e2e
 
 lint:
 	ruff check src/ tests/

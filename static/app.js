@@ -34,10 +34,45 @@ const themeToggle = document.getElementById("theme-toggle");
 const filterBtns = document.querySelectorAll(".filter-btn");
 const statusIndicator = document.getElementById("status-indicator");
 const statusText = document.getElementById("status-text");
+const chatInputStatus = document.getElementById("chat-input-status");
 
 // Initialize
 document.body.setAttribute("data-theme", state.theme);
 themeToggle.textContent = state.theme === "light" ? "🌙" : "☀️";
+
+const ICON_ERROR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+
+function showThinkingStatus() {
+    chatInputStatus.hidden = false;
+    chatInputStatus.className = "chat-input-status chat-input-status--thinking";
+    chatInputStatus.innerHTML = `
+        <span class="chat-input-status__spinner" aria-hidden="true"></span>
+        <span class="chat-input-status__text">Thinking...</span>
+    `;
+    chatForm.setAttribute("aria-busy", "true");
+}
+
+function showErrorStatus(message) {
+    chatInputStatus.hidden = false;
+    chatInputStatus.className = "chat-input-status chat-input-status--error";
+    const safe = String(message || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    chatInputStatus.innerHTML = `
+        <span class="chat-input-status__icon">${ICON_ERROR_SVG}</span>
+        <span class="chat-input-status__text">Error${safe ? `<span class="chat-input-status__detail">${safe}</span>` : ""}</span>
+    `;
+    chatForm.setAttribute("aria-busy", "false");
+}
+
+function hideChatInputStatus() {
+    chatInputStatus.hidden = true;
+    chatInputStatus.className = "chat-input-status";
+    chatInputStatus.innerHTML = "";
+    chatForm.setAttribute("aria-busy", "false");
+}
 
 function connectWebSocket() {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -56,10 +91,12 @@ function connectWebSocket() {
         if (msg.type === "token") {
             appendToken(msg.content);
         } else if (msg.type === "done") {
+            hideChatInputStatus();
             renderSources(msg.sources);
             state.conversationId = msg.conversation_id;
             finalizeAssistantMessage();
         } else if (msg.type === "error") {
+            showErrorStatus(msg.message);
             renderError(msg.message);
             finalizeAssistantMessage();
         }
@@ -141,8 +178,10 @@ chatForm.onsubmit = (e) => {
     addUserMessage(query);
     queryInput.value = "";
     sendBtn.disabled = true;
+    hideChatInputStatus();
 
     if (state.ws.readyState === WebSocket.OPEN) {
+        showThinkingStatus();
         state.ws.send(JSON.stringify({
             type: "query",
             query: query,
@@ -150,12 +189,14 @@ chatForm.onsubmit = (e) => {
             conversation_id: state.conversationId,
         }));
     } else {
+        showErrorStatus("Not connected to server. Please wait.");
         renderError("Not connected to server. Please wait.");
         finalizeAssistantMessage();
     }
 };
 
 clearBtn.onclick = () => {
+    hideChatInputStatus();
     messagesContainer.innerHTML = `
         <div class="message assistant">
             <div class="bubble">History cleared. How can I help you today?</div>

@@ -87,7 +87,7 @@ User (HTTP/WebSocket)
 | **PostgreSQL** | 5432 | App metadata (`public`) + LLM-generated SQL output (`generated` + restricted user) |
 | **Milvus** | 19530 | Vector index (e.g. HNSW, cosine) |
 | **MinIO** | 9000/9001 | Blobs: raw uploads + converted text |
-| **Ollama** | 11434 | Embeddings and/or local chat model (`/api/embed`; older servers use `/api/embeddings` fallback) |
+| **Ollama** | 11435→11434 | Embeddings/chat; on startup the container pulls `EMBED_MODEL` and `LLM_MODEL` from `.env` (or `OLLAMA_PULL_MODELS`). See `scripts/ollama-docker-entrypoint.sh`. |
 
 ---
 
@@ -149,6 +149,7 @@ Run `pytest` after substantive changes. Do not skip failing tests to “move on.
 
 - **Unit tests:** mock MinIO, Drive, Ollama, Milvus, Redis; pass mocks via DI.
 - **Integration:** `@pytest.mark.integration` when real Docker services are required.
+- **Browser E2E:** Playwright (`e2e/`) against a mock HTTP+WS server by default; optional `E2E_REAL_BASE_URL` smoke tests (`@smoke`).
 - **Async:** `async def` tests; `asyncio_mode = "auto"` in `pyproject.toml`.
 - **Fixtures:** `tests/conftest.py` — `settings`, `db_session`, mocks for external services, sample payloads.
 
@@ -161,6 +162,8 @@ make install     # pip install -r requirements-dev.txt
 make up          # docker compose up -d
 make down        # docker compose down
 make test        # pytest -v --tb=short
+make e2e         # cd e2e && npm ci && npx playwright install chromium && npm run test:e2e
+# Optional: E2E_REAL_BASE_URL=http://127.0.0.1:8000 npx playwright test --grep @smoke (from e2e/; real backend must be up). If Chromium fails to start on Linux, run once: npx playwright install --with-deps
 make lint        # ruff check src/ tests/
 make format      # ruff format src/ tests/
 make typecheck   # mypy --strict src/

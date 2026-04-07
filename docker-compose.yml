@@ -88,15 +88,21 @@ services:
 
   ollama:
     image: ollama/ollama
+    env_file: .env
     ports:
       # Host port 11435 avoids conflict when a local Ollama already uses 11434
       - "11435:11434"
     volumes:
       - ollama_models:/root/.ollama
+      - ./scripts/ollama-docker-entrypoint.sh:/ollama-docker-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/ollama-docker-entrypoint.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
+      # Ready only after entrypoint finishes pulling (see scripts/ollama-docker-entrypoint.sh)
+      test: ["CMD-SHELL", "test -f /tmp/ollama-models-ready"]
       interval: 10s
+      timeout: 5s
       retries: 5
+      start_period: 7200s
 
   app-api:
     build: .
