@@ -15,7 +15,9 @@ def build_settings() -> Settings:
 
 def build_storage(settings: Settings | None = None) -> MinIOStorage:
     s = settings or build_settings()
-    return MinIOStorage(s)
+    storage = MinIOStorage(s)
+    storage.ensure_buckets()
+    return storage
 
 
 def build_metadata_repo(settings: Settings | None = None) -> tuple[SyncMetadataRepository, Callable[[], None]]:

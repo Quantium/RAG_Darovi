@@ -130,7 +130,7 @@ services:
 
   app-worker:
     build: .
-    command: celery -A src.worker.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A src.worker.celery_app worker --loglevel=info --concurrency=4 -Q celery,download,convert,embed
     env_file: .env
     environment:
       <<: *app-env

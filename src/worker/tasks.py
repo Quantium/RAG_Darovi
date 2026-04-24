@@ -5,6 +5,9 @@ import redis
 import structlog
 from celery import chain
 
+from src.drive.drive_credentials import build_drive_service_for_sync_repo, effective_drive_folder_id
+from src.drive.downloader import DriveDownloader
+from src.drive.local_downloader import LocalFolderDownloader
 from src.worker.celery_app import app, RetryableTask
 from src.worker.task_helpers import (
     build_metadata_repo,
@@ -26,9 +29,6 @@ def run_incremental_sync(self):
 
     Acquires a distributed lock to prevent concurrent syncs.
     """
-    from src.drive.auth import build_drive_service
-    from src.drive.downloader import DriveDownloader
-
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
@@ -46,13 +46,13 @@ def run_incremental_sync(self):
     repo, cleanup = build_metadata_repo(settings)
 
     try:
-        service = build_drive_service(settings.google_application_credentials)
-        downloader = DriveDownloader(
-            drive_service=service,
-            storage=storage,
-            metadata_repo=repo,
-            settings=settings,
-        )
+        if settings.ingest_source == "drive" and settings.google_oauth_client_id:
+            row = repo.get_drive_connection_sync()
+            if row and row.refresh_token_enc and not row.selected_folder_id:
+                task_logger.warning("sync.skipped", reason="OAuth connected but no folder selected")
+                return
+
+        downloader = _build_sync_downloader(settings, storage, repo)
         changed_files, deleted_ids = asyncio.run(downloader.incremental_sync())
         task_logger.info("sync.files_found", changed=len(changed_files), deleted=len(deleted_ids))
 
@@ -70,10 +70,7 @@ def run_incremental_sync(self):
 
 @app.task(base=RetryableTask, bind=True)
 def download_file(self, file_meta: dict) -> dict:
-    """Download a single file from Drive to MinIO."""
-    from src.drive.auth import build_drive_service
-    from src.drive.downloader import DriveDownloader
-
+    """Download a single file from configured source to MinIO."""
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
@@ -86,13 +83,7 @@ def download_file(self, file_meta: dict) -> dict:
     repo, cleanup = build_metadata_repo(settings)
 
     try:
-        service = build_drive_service(settings.google_application_credentials)
-        downloader = DriveDownloader(
-            drive_service=service,
-            storage=storage,
-            metadata_repo=repo,
-            settings=settings,
-        )
+        downloader = _build_sync_downloader(settings, storage, repo)
         minio_key = asyncio.run(downloader.download_file(file_meta))
 
         if minio_key is None:
@@ -139,7 +130,7 @@ def convert_file(self, download_result: dict) -> dict:
         try:
             converter = get_converter(download_result["mime_type"])
         except ValueError:
-            repo.update_status(
+            repo.update_status_sync(
                 drive_file_id,
                 "skipped",
                 error_message=f"Unsupported MIME: {download_result['mime_type']}",
@@ -155,7 +146,7 @@ def convert_file(self, download_result: dict) -> dict:
 
         text_key = f"{drive_file_id}.txt"
         storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
-        repo.update_status(drive_file_id, "converted")
+        repo.update_status_sync(drive_file_id, "converted")
 
         task_logger.info("task.completed", text_key=text_key)
         return {
@@ -293,7 +284,7 @@ def delete_file_vectors(self, drive_file_id: str) -> dict:
         except Exception as exc:
             task_logger.warning("storage_cleanup.partial", error=str(exc))
 
-        repo.delete_file_record(drive_file_id)
+        repo.delete_file_record_sync(drive_file_id)
         task_logger.info("task.completed")
         return {"drive_file_id": drive_file_id, "deleted": True}
     except Exception as exc:
@@ -371,3 +362,19 @@ def dispatch_file_pipeline(file_meta: dict, trace_id: str | None = None) -> None
         embed_file.s(),
     )
     pipeline.apply_async(headers={"trace_id": trace_id})
+
+
+def _build_sync_downloader(settings, storage, repo):
+    if settings.ingest_source == "local":
+        return LocalFolderDownloader(storage=storage, metadata_repo=repo, settings=settings)
+    if settings.ingest_source == "drive":
+        service = build_drive_service_for_sync_repo(settings, repo)
+        folder_id = effective_drive_folder_id(settings, repo)
+        return DriveDownloader(
+            drive_service=service,
+            storage=storage,
+            metadata_repo=repo,
+            settings=settings,
+            drive_folder_id=folder_id,
+        )
+    raise ValueError(f"Unsupported ingest_source: {settings.ingest_source}")

@@ -62,7 +62,7 @@ class RetryableTask(Task):
             from src.worker.task_helpers import build_metadata_repo
 
             repo, cleanup = build_metadata_repo()
-            repo.update_status(drive_file_id, "failed", error_message=str(exc))
+            repo.update_status_sync(drive_file_id, "failed", error_message=str(exc))
             cleanup()
         except Exception as inner_exc:
             logger.error("task.on_failure_error", error=str(inner_exc))

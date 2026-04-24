@@ -45,6 +45,28 @@ class TestLLMClient:
         response = await llm.chat([{"role": "user", "content": "Hi"}])
         assert isinstance(response, str)
 
+    @patch("src.rag.llm_client.openai.AsyncOpenAI")
+    async def test_deepseek_uses_dedicated_env_key(self, mock_openai, settings):
+        settings_ds = settings.model_copy(
+            update={
+                "llm_provider": "deepseek",
+                "llm_api_key": SecretStr(""),
+                "deepseek_api_key": SecretStr("deepseek-secret"),
+            }
+        )
+        mock_client = AsyncMock()
+        mock_client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content="DeepSeek response"))]
+        )
+        mock_openai.return_value = mock_client
+
+        llm = DeepSeekLLMClient(settings_ds)
+        await llm.chat([{"role": "user", "content": "Hi"}])
+
+        _, kwargs = mock_openai.call_args
+        assert kwargs["api_key"] == "deepseek-secret"
+        assert kwargs["base_url"] == "https://api.deepseek.com/v1/"
+
     def test_provider_selection_from_config(self, settings):
         llm = create_llm_client(settings)
         assert isinstance(llm, OllamaLLMClient)

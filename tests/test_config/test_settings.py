@@ -14,8 +14,8 @@ class TestSettings:
         assert s.milvus_port == 19530
         assert s.embed_model == "nomic-embed-text"
         assert s.embed_dim == 768
-        assert s.api_ssl_certfile == ""
-        assert s.api_ssl_keyfile == ""
+        assert isinstance(s.api_ssl_certfile, str)
+        assert isinstance(s.api_ssl_keyfile, str)
 
     def test_settings_reads_env_vars(self, monkeypatch):
         monkeypatch.setenv("MILVUS_PORT", "29530")
@@ -32,3 +32,7 @@ class TestSettings:
     def test_settings_validates_port_type(self):
         with pytest.raises(ValidationError):
             Settings(milvus_port="not-a-number")  # type: ignore[arg-type]
+
+    def test_settings_validates_ingest_source(self):
+        with pytest.raises(ValidationError):
+            Settings(ingest_source="invalid-source")

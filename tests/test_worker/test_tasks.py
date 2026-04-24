@@ -7,13 +7,40 @@ from unittest.mock import patch, MagicMock, AsyncMock, ANY
 
 from src.worker.tasks import download_file, convert_file, embed_file, run_incremental_sync, delete_file_vectors
 from src.worker.celery_app import RetryableTask
+from config.settings import Settings
 
 
 class TestWorkerTasks:
-    @patch("src.drive.auth.build_drive_service")
-    @patch("src.drive.downloader.DriveDownloader")
+    @patch("src.worker.tasks.build_drive_service_for_sync_repo")
+    @patch("src.worker.tasks.effective_drive_folder_id", return_value="")
+    @patch("src.worker.tasks.LocalFolderDownloader")
     @patch("src.worker.tasks.build_metadata_repo")
-    def test_download_task_calls_downloader(self, mock_repo_builder, mock_dl_cls, mock_build_service):
+    @patch("src.worker.tasks.redis.Redis")
+    @patch("src.worker.tasks.build_settings")
+    def test_sync_uses_local_source_without_drive_client(
+        self,
+        mock_build_settings,
+        mock_redis_cls,
+        mock_repo_builder,
+        mock_local_cls,
+        _mock_effective_folder,
+        mock_drive_service,
+    ):
+        mock_build_settings.return_value = Settings(ingest_source="local", local_source_folder="/tmp/docs")
+        mock_redis_cls.from_url.return_value.set.return_value = True
+        mock_repo_builder.return_value = (MagicMock(), lambda: None)
+        mock_local_cls.return_value.incremental_sync = AsyncMock(return_value=([], []))
+
+        run_incremental_sync()
+
+        mock_local_cls.assert_called_once()
+        mock_drive_service.assert_not_called()
+
+    @patch("src.worker.tasks.effective_drive_folder_id", return_value="")
+    @patch("src.worker.tasks.build_drive_service_for_sync_repo")
+    @patch("src.worker.tasks.DriveDownloader")
+    @patch("src.worker.tasks.build_metadata_repo")
+    def test_download_task_calls_downloader(self, mock_repo_builder, mock_dl_cls, mock_build_service, _ef):
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
         mock_dl = mock_dl_cls.return_value
         mock_dl.download_file = AsyncMock(return_value="raw-files/f1/test.pdf")
@@ -71,10 +98,11 @@ class TestWorkerTasks:
         pipeline = chain(download_file.s({}), convert_file.s(), embed_file.s())
         assert pipeline is not None
 
-    @patch("src.drive.auth.build_drive_service")
-    @patch("src.drive.downloader.DriveDownloader")
+    @patch("src.worker.tasks.effective_drive_folder_id", return_value="")
+    @patch("src.worker.tasks.build_drive_service_for_sync_repo")
+    @patch("src.worker.tasks.DriveDownloader")
     @patch("src.worker.tasks.build_metadata_repo")
-    def test_task_retry_on_failure(self, mock_repo_builder, mock_dl_cls, mock_build_service):
+    def test_task_retry_on_failure(self, mock_repo_builder, mock_dl_cls, mock_build_service, _ef):
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
         mock_dl = mock_dl_cls.return_value
         mock_dl.download_file.side_effect = ConnectionError("timeout")
@@ -84,12 +112,13 @@ class TestWorkerTasks:
     @patch("src.worker.task_helpers.SyncMetadataRepository")
     def test_task_marks_failed_after_max_retries(self, mock_repo_cls):
         mock_repo = mock_repo_cls.return_value
+        mock_repo.update_status_sync = MagicMock()
 
         task = RetryableTask()
         task.name = "test_task"
         task.on_failure(Exception("error"), "task_id", [{"id": "f1"}], {}, None)
 
-        mock_repo.update_status.assert_called_with("f1", "failed", error_message="error")
+        mock_repo.update_status_sync.assert_called_with("f1", "failed", error_message="error")
 
     @patch("src.vectorizer.milvus_store.MilvusStore")
     @patch("src.worker.tasks.build_metadata_repo")
@@ -100,7 +129,7 @@ class TestWorkerTasks:
         mock_milvus_store = mock_milvus_store_cls.return_value
 
         result = delete_file_vectors("f1")
-        mock_repo.delete_file_record.assert_called_once_with("f1")
+        mock_repo.delete_file_record_sync.assert_called_once_with("f1")
         mock_milvus_store.delete_by_source.assert_called_once_with("f1")
         assert result["deleted"] is True
 
@@ -109,18 +138,19 @@ class TestWorkerTasks:
         mock_redis = mock_redis_cls.from_url.return_value
         mock_redis.set.return_value = False  # lock not acquired
 
-        with patch("src.drive.auth.build_drive_service") as mock_build_service:
+        with patch("src.worker.tasks.build_drive_service_for_sync_repo") as mock_build_service:
             run_incremental_sync()
             mock_build_service.assert_not_called()
 
-    @patch("src.drive.auth.build_drive_service")
-    @patch("src.drive.downloader.DriveDownloader")
+    @patch("src.worker.tasks.build_drive_service_for_sync_repo")
+    @patch("src.worker.tasks.effective_drive_folder_id", return_value="")
+    @patch("src.worker.tasks.DriveDownloader")
     @patch("src.worker.tasks.build_metadata_repo")
     @patch("src.worker.tasks.redis.Redis")
     @patch("src.worker.tasks.dispatch_file_pipeline")
     @patch("src.worker.tasks.delete_file_vectors")
     def test_sync_dispatches_deletions(
-        self, mock_delete_task, mock_dispatch, mock_redis_cls, mock_repo_builder, mock_dl_cls, mock_build_service
+        self, mock_delete_task, mock_dispatch, mock_redis_cls, mock_repo_builder, mock_dl_cls, mock_build_service, _ef
     ):
         mock_redis_cls.from_url.return_value.set.return_value = True
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
@@ -145,4 +175,4 @@ class TestWorkerTasks:
             {"drive_file_id": "f1", "minio_raw_key": "raw/f1", "mime_type": "video/mp4", "name": "movie.mp4"}
         )
         assert result.get("skipped") is True
-        mock_repo.update_status.assert_called_with("f1", "skipped", error_message="Unsupported MIME: video/mp4")
+        mock_repo.update_status_sync.assert_called_with("f1", "skipped", error_message="Unsupported MIME: video/mp4")

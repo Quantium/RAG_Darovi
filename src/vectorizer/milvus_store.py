@@ -81,6 +81,16 @@ class MilvusStore:
         if not self.collection_exists():
             self.create_collection()
 
+    def drop_collection_if_exists(self) -> None:
+        """Remove the entire vector collection (all partitions and data). Used when switching Drive folder."""
+        if self._client:
+            if self._client.has_collection(self._collection_name):
+                self._client.drop_collection(self._collection_name)
+        else:
+            if utility.has_collection(self._collection_name):
+                utility.drop_collection(self._collection_name)
+        logger.info("milvus.collection_dropped", name=self._collection_name)
+
     def upsert(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
         if not chunks:
             return

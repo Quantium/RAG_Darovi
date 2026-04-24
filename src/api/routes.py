@@ -16,6 +16,7 @@ from src.api.schemas import (
     FileStatusItem,
     GenerateSQLRequest,
     GenerateSQLResponse,
+    RawDataItem,
     SourceReference,
     StatusResponse,
 )
@@ -23,9 +24,10 @@ from src.api.app import verify_api_key
 from src.automation.templates import parse_automation
 from src.rag.chain import rag_answer, rag_answer_stream
 from src.rag.retriever import RetrievedChunk
+from src.storage.backend import MinIOStorage
 
 logger = structlog.get_logger()
-router = APIRouter(dependencies=[Depends(verify_api_key)])
+router = APIRouter()
 
 
 def _chunk_to_source(c: RetrievedChunk) -> SourceReference:
@@ -39,7 +41,27 @@ def _chunk_to_source(c: RetrievedChunk) -> SourceReference:
     )
 
 
-@router.post("/chat", response_model=ChatResponse)
+def _safe_decode_extracted_text(raw_bytes: bytes, max_chars: int = 6000) -> str:
+    text = raw_bytes.decode("utf-8", errors="replace").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}…"
+
+
+def _raw_text_availability(
+    storage: MinIOStorage, bucket_name: str, minio_text_key: str | None
+) -> tuple[bool, str | None]:
+    if not minio_text_key:
+        return False, "No extracted text key recorded."
+    try:
+        if storage.exists(bucket_name, minio_text_key):
+            return True, None
+        return False, "Extracted text object not found in storage."
+    except Exception:
+        return False, "Could not verify extracted text in storage."
+
+
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     retriever = request.app.state.retriever
     llm = request.app.state.llm
@@ -62,8 +84,15 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 
 @router.websocket("/ws/chat")
 async def ws_chat(websocket: WebSocket) -> None:
-    # Manual API Key verification for WebSockets as Depends() in router might not handle it easily via headers in some clients
-    # For now, we assume verify_api_key in router handles it or we'd check here from query params.
+    settings_ws = websocket.app.state.settings
+    configured_key = settings_ws.api_key.get_secret_value()
+    if configured_key:
+        q_key = websocket.query_params.get("api_key")
+        header_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-Key")
+        if (q_key or header_key or "") != configured_key:
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     retriever = websocket.app.state.retriever
     llm = websocket.app.state.llm
@@ -115,7 +144,7 @@ async def ws_chat(websocket: WebSocket) -> None:
         logger.info("ws.disconnected")
 
 
-@router.post("/generate-sql", response_model=GenerateSQLResponse)
+@router.post("/generate-sql", response_model=GenerateSQLResponse, dependencies=[Depends(verify_api_key)])
 async def generate_sql(request: Request, body: GenerateSQLRequest) -> GenerateSQLResponse:
     job_id = str(uuid4())
     settings = request.app.state.settings
@@ -130,7 +159,7 @@ async def generate_sql(request: Request, body: GenerateSQLRequest) -> GenerateSQ
     return GenerateSQLResponse(job_id=job_id, status="pending")
 
 
-@router.get("/generate-sql/{job_id}", response_model=GenerateSQLResponse)
+@router.get("/generate-sql/{job_id}", response_model=GenerateSQLResponse, dependencies=[Depends(verify_api_key)])
 async def get_sql_job(request: Request, job_id: str) -> GenerateSQLResponse:
     r = redis.Redis.from_url(request.app.state.settings.redis_cache_url)
     job = cast(dict[bytes, bytes], r.hgetall(f"sql_job:{job_id}"))
@@ -146,7 +175,7 @@ async def get_sql_job(request: Request, job_id: str) -> GenerateSQLResponse:
     )
 
 
-@router.post("/automations", response_model=AutomationResponse)
+@router.post("/automations", response_model=AutomationResponse, dependencies=[Depends(verify_api_key)])
 async def create_automation(body: AutomationRequest) -> AutomationResponse:
     try:
         config = parse_automation(body.yaml_config)
@@ -156,7 +185,7 @@ async def create_automation(body: AutomationRequest) -> AutomationResponse:
         return AutomationResponse(name="", trigger="", status="error", message=str(exc))
 
 
-@router.get("/status", response_model=StatusResponse)
+@router.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_api_key)])
 async def get_status(request: Request) -> StatusResponse:
     from src.metadata.repository import MetadataRepository
 
@@ -181,23 +210,69 @@ async def get_status(request: Request) -> StatusResponse:
     )
 
 
-@router.get("/status/files", response_model=list[FileStatusItem])
+@router.get("/status/files", response_model=list[FileStatusItem], dependencies=[Depends(verify_api_key)])
 async def get_status_files(request: Request) -> list[FileStatusItem]:
     from src.metadata.repository import MetadataRepository
+
+    settings = request.app.state.settings
+    storage = MinIOStorage(settings)
 
     async with AsyncSession(request.app.state.engine) as session:
         repo = MetadataRepository(session)
         files = await repo.list_by_status(None)
 
-    return [
-        FileStatusItem(
-            drive_file_id=f.drive_file_id,
-            name=f.name,
-            mime_type=f.mime_type,
-            status=f.status,
-            error_message=f.error_message,
-            chunk_count=f.chunk_count,
-            last_processed_at=str(f.last_processed_at) if f.last_processed_at else None,
+    payload: list[FileStatusItem] = []
+    for f in files:
+        raw_text_available, raw_text_missing_reason = _raw_text_availability(
+            storage, settings.minio_bucket_text, f.minio_text_key
         )
-        for f in files
-    ]
+        payload.append(
+            FileStatusItem(
+                drive_file_id=f.drive_file_id,
+                name=f.name,
+                mime_type=f.mime_type,
+                status=f.status,
+                error_message=f.error_message,
+                chunk_count=f.chunk_count,
+                last_processed_at=str(f.last_processed_at) if f.last_processed_at else None,
+                raw_text_available=raw_text_available,
+                raw_text_missing_reason=raw_text_missing_reason,
+            )
+        )
+    return payload
+
+
+@router.get("/status/raw-data", response_model=list[RawDataItem], dependencies=[Depends(verify_api_key)])
+async def get_status_raw_data(request: Request) -> list[RawDataItem]:
+    from src.metadata.repository import MetadataRepository
+
+    settings = request.app.state.settings
+    storage = MinIOStorage(settings)
+
+    async with AsyncSession(request.app.state.engine) as session:
+        repo = MetadataRepository(session)
+        files = await repo.list_by_status(None)
+
+    payload: list[RawDataItem] = []
+    for file_record in files:
+        extracted_text = None
+        minio_text_key = getattr(file_record, "minio_text_key", None)
+        if minio_text_key:
+            try:
+                raw_bytes = storage.download(settings.minio_bucket_text, minio_text_key)
+                extracted_text = _safe_decode_extracted_text(raw_bytes)
+            except Exception:
+                extracted_text = None
+
+        payload.append(
+            RawDataItem(
+                drive_file_id=file_record.drive_file_id,
+                name=file_record.name,
+                mime_type=file_record.mime_type,
+                status=file_record.status,
+                last_processed_at=str(file_record.last_processed_at) if file_record.last_processed_at else None,
+                extracted_text=extracted_text,
+            )
+        )
+
+    return payload

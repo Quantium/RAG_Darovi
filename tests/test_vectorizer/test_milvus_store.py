@@ -42,3 +42,8 @@ class TestMilvusStore:
     def test_collection_exists_check(self, store, mock_milvus_client):
         mock_milvus_client.has_collection.return_value = True
         assert store.collection_exists() is True
+
+    def test_drop_collection_if_exists(self, store, mock_milvus_client):
+        mock_milvus_client.has_collection.return_value = True
+        store.drop_collection_if_exists()
+        mock_milvus_client.drop_collection.assert_called_once()

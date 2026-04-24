@@ -66,3 +66,40 @@ class FileStatusItem(BaseModel):
     error_message: Optional[str]
     chunk_count: int
     last_processed_at: Optional[str]
+    raw_text_available: bool
+    raw_text_missing_reason: Optional[str]
+
+
+class RawDataItem(BaseModel):
+    drive_file_id: str
+    name: str
+    mime_type: str
+    status: str
+    last_processed_at: Optional[str]
+    extracted_text: Optional[str]
+
+
+class DriveBootstrapResponse(BaseModel):
+    ingest_source: str = "drive"
+    oauth_configured: bool
+    connected: bool
+    folder_selected: bool
+    service_account_ready: bool
+    onboarding_phase: str
+    chat_ready: bool
+    total_files: int
+    pending: int
+    downloaded: int
+    converted: int
+    embedded: int
+    failed: int
+    skipped: int
+
+
+class DriveFolderItem(BaseModel):
+    id: str
+    name: str
+
+
+class SelectFolderRequest(BaseModel):
+    folder_id: str = Field(..., min_length=1, max_length=512)

@@ -135,6 +135,25 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && url.pathname === "/drive/bootstrap") {
+    sendJson(res, 200, {
+      oauth_configured: false,
+      connected: true,
+      folder_selected: true,
+      service_account_ready: true,
+      onboarding_phase: "ready",
+      chat_ready: true,
+      total_files: 0,
+      pending: 0,
+      downloaded: 0,
+      converted: 0,
+      embedded: 0,
+      failed: 0,
+      skipped: 0,
+    });
+    return;
+  }
+
   if (req.method === "GET" && url.pathname === "/status") {
     const fromQuery = Number.parseInt(url.searchParams.get("failed") || "0", 10) || 0;
     const failed = statusFailedOverride !== null ? statusFailedOverride : fromQuery;
@@ -146,6 +165,58 @@ const server = http.createServer((req, res) => {
       embedded: 0,
       failed,
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/status/files") {
+    sendJson(res, 200, [
+      {
+        drive_file_id: "file-1",
+        name: "Invoice-April.pdf",
+        mime_type: "application/pdf",
+        status: "embedded",
+        error_message: null,
+        chunk_count: 8,
+        last_processed_at: "2026-04-24T06:10:00+00:00",
+        raw_text_available: true,
+        raw_text_missing_reason: null,
+      },
+      {
+        drive_file_id: "file-2",
+        name: "Contract-Draft.docx",
+        mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        status: "failed",
+        error_message: "OCR timeout",
+        chunk_count: 0,
+        last_processed_at: "2026-04-24T06:11:30+00:00",
+        raw_text_available: false,
+        raw_text_missing_reason: "Extracted text object not found in storage.",
+      },
+    ]);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/status/raw-data") {
+    sendJson(res, 200, [
+      {
+        drive_file_id: "file-1",
+        name: "Invoice-April.pdf",
+        mime_type: "application/pdf",
+        status: "embedded",
+        last_processed_at: "2026-04-24T06:10:00+00:00",
+        extracted_text:
+          "Extracted invoice text from OCR. " +
+          "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20),
+      },
+      {
+        drive_file_id: "file-2",
+        name: "Contract-Draft.docx",
+        mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        status: "failed",
+        last_processed_at: "2026-04-24T06:11:30+00:00",
+        extracted_text: null,
+      },
+    ]);
     return;
   }
 

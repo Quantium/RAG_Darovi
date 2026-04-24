@@ -15,7 +15,7 @@ def main() -> None:
     sub.add_parser("serve", help="Start FastAPI server")
     sub.add_parser("worker", help="Start Celery worker")
     sub.add_parser("beat", help="Start Celery Beat scheduler")
-    sub.add_parser("ingest", help="Run one-time full ingestion from Drive")
+    sub.add_parser("ingest", help="Run one-time ingestion from configured source")
 
     query_p = sub.add_parser("query", help="Query documents from CLI")
     query_p.add_argument("text", help="The question to ask")

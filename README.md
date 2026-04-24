@@ -1,6 +1,6 @@
 # RAG Darovi
 
-A RAG (retrieval-augmented generation) pipeline: ingest documents from Google Drive, convert and chunk text, embed with Ollama, store vectors in Milvus, and serve a FastAPI backend with a vanilla JS chat UI (REST + WebSocket), Celery workers, and PostgreSQL metadata. Optional API key auth and SQL automation features are included.
+A RAG (retrieval-augmented generation) pipeline: ingest documents from Google Drive or a local folder, convert and chunk text, embed with Ollama, store vectors in Milvus, and serve a FastAPI backend with a vanilla JS chat UI (REST + WebSocket), Celery workers, and PostgreSQL metadata. Optional API key auth and SQL automation features are included.
 
 For architecture depth, phased build plans, and agent-oriented rules, see [AGENTS.md](AGENTS.md) and [PLAN.md](PLAN.md). The master index is [plans/PLAN_00_INDEX.md](plans/PLAN_00_INDEX.md).
 
@@ -44,6 +44,15 @@ All application configuration goes through Pydantic **`Settings`** in [config/se
 
 Compose services **`app-api`**, **`app-worker`**, and **`app-beat`** use `env_file: .env` plus an **`x-app-env`** block in [docker-compose.yml](docker-compose.yml) that sets **in-cluster hostnames** (`redis`, `postgres`, `milvus`, `minio`, `ollama`) so containers do not rely on `localhost` for other services. Your `.env` may still say `localhost` for **host-only** workflows; inside Compose, those URLs are overridden for the variables listed under `x-app-env`.
 
+### Ingestion source
+
+Choose the ingestion source with [`.env.example`](.env.example):
+
+- `INGEST_SOURCE=drive` (default): use Google Drive credentials and folder selection.
+- `INGEST_SOURCE=local`: read files recursively from `LOCAL_SOURCE_FOLDER`.
+
+When using local mode, set `LOCAL_SOURCE_FOLDER` to an existing folder path visible to the process/container running the worker.
+
 ### Google Drive (optional)
 
 For Drive sync, you need a Google **service account** JSON with Drive API access, placed under `credentials/` (see [`.env.example`](.env.example): `GOOGLE_APPLICATION_CREDENTIALS`, `DRIVE_FOLDER_ID`). The Docker image **does not** copy `credentials/` from the build context ([`.dockerignore`](.dockerignore)); for containers you must mount the directory or otherwise provide the file at the path referenced by `GOOGLE_APPLICATION_CREDENTIALS`.
@@ -51,6 +60,15 @@ For Drive sync, you need a Google **service account** JSON with Drive API access
 ### API key (optional)
 
 If `API_KEY` is set in `.env`, clients must send header `X-API-Key`. Empty `API_KEY` disables auth (dev mode).
+
+### LLM provider selection
+
+The chat model is selected through `.env`:
+
+- Local Ollama: `LLM_PROVIDER=ollama` with `LLM_BASE_URL` pointing to your Ollama OpenAI-compatible endpoint.
+- DeepSeek API: `LLM_PROVIDER=deepseek`, set `DEEPSEEK_API_KEY`, and choose `LLM_MODEL` (for example `deepseek-chat`).
+
+`DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com/v1/` and can be overridden if needed.
 
 ## Local Python environment
 
@@ -231,6 +249,10 @@ Check `docker compose logs app-api`, verify dependencies reached **healthy**, an
 ### Drive sync does nothing
 
 Confirm **service account JSON** path, **`DRIVE_FOLDER_ID`**, and API enablement. Mount `credentials/` into the container if you run sync inside Docker.
+
+### Local sync does nothing
+
+Set `INGEST_SOURCE=local` and verify `LOCAL_SOURCE_FOLDER` points to a real directory accessible by the worker process/container.
 
 ### Where are production vs dev dependencies?
 

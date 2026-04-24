@@ -37,22 +37,18 @@ class OpenAICompatibleLLMClient:
         resolved_model: str | None = None
         if args and isinstance(args[0], Settings):
             settings = args[0]
-            # Use same logic as create_llm_client but inside __init__ for test compatibility
-            providers = {
-                "ollama": (settings.llm_base_url, "ollama"),
-                "gemini": (
-                    "https://generativelanguage.googleapis.com/v1beta/openai/",
-                    settings.llm_api_key.get_secret_value(),
-                ),
-                "deepseek": (
-                    "https://api.deepseek.com/v1/",
-                    settings.llm_api_key.get_secret_value(),
-                ),
-            }
-            if settings.llm_provider not in providers:
+            # Use same provider-resolution logic here for test compatibility.
+            if settings.llm_provider == "ollama":
+                resolved_base = settings.llm_base_url
+                resolved_key = "ollama"
+            elif settings.llm_provider == "gemini":
+                resolved_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+                resolved_key = settings.llm_api_key.get_secret_value()
+            elif settings.llm_provider == "deepseek":
+                resolved_base = settings.deepseek_base_url
+                resolved_key = settings.deepseek_api_key.get_secret_value() or settings.llm_api_key.get_secret_value()
+            else:
                 raise ValueError(f"Unknown LLM provider: {settings.llm_provider}")
-
-            resolved_base, resolved_key = providers[settings.llm_provider]
             resolved_model = settings.llm_model
         else:
             raw_base = kwargs.get("base_url") or (args[0] if len(args) > 0 else None)

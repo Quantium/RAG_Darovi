@@ -11,7 +11,6 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
 from config.settings import Settings
-from src.metadata.repository import MetadataRepository
 from src.storage.backend import StorageBackend
 
 logger = structlog.get_logger()
@@ -22,23 +21,25 @@ class DriveDownloader:
         self,
         drive_service: Resource,
         storage: StorageBackend,
-        metadata_repo: MetadataRepository,
+        metadata_repo: Any,
         settings: Settings,
+        drive_folder_id: str | None = None,
     ) -> None:
         self._drive_service = drive_service
         self._storage = storage
         self._metadata_repo = metadata_repo
         self._settings = settings
+        self._drive_folder_id = drive_folder_id if drive_folder_id is not None else settings.drive_folder_id
 
     async def full_sync(self) -> list[dict[str, Any]]:
         """Perform initial bootstrap scan of the configured folder."""
-        logger.info("drive.full_sync.start", folder_id=self._settings.drive_folder_id)
+        logger.info("drive.full_sync.start", folder_id=self._drive_folder_id)
 
         files = []
         page_token = None
 
-        query = f"'{self._settings.drive_folder_id}' in parents"
-        if not self._settings.drive_folder_id:
+        query = f"'{self._drive_folder_id}' in parents"
+        if not self._drive_folder_id:
             query = "trashed = false"
 
         while True:

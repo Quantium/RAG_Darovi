@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import AsyncClient, ASGITransport
@@ -76,6 +77,69 @@ class TestAPIRoutes:
                 response = await client.get("/status/files")
                 assert response.status_code == 200
                 assert isinstance(response.json(), list)
+
+    @pytest.mark.integration
+    async def test_status_files_endpoint_reports_raw_text_availability(self, app_mocked):
+        available_record = MagicMock()
+        available_record.drive_file_id = "file-1"
+        available_record.name = "Invoice-April.pdf"
+        available_record.mime_type = "application/pdf"
+        available_record.status = "embedded"
+        available_record.error_message = None
+        available_record.chunk_count = 8
+        available_record.last_processed_at = datetime.now(timezone.utc)
+        available_record.minio_text_key = "file-1.txt"
+
+        missing_record = MagicMock()
+        missing_record.drive_file_id = "file-2"
+        missing_record.name = "Contract-Draft.docx"
+        missing_record.mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        missing_record.status = "embedded"
+        missing_record.error_message = None
+        missing_record.chunk_count = 5
+        missing_record.last_processed_at = datetime.now(timezone.utc)
+        missing_record.minio_text_key = "file-2.txt"
+
+        with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
+            mock_repo = mock_repo_cls.return_value
+            mock_repo.list_by_status = AsyncMock(return_value=[available_record, missing_record])
+            with patch("src.api.routes.MinIOStorage") as mock_storage_cls:
+                mock_storage = mock_storage_cls.return_value
+                mock_storage.exists.side_effect = [True, False]
+                async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                    response = await client.get("/status/files")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["raw_text_available"] is True
+        assert payload[0]["raw_text_missing_reason"] is None
+        assert payload[1]["raw_text_available"] is False
+        assert payload[1]["raw_text_missing_reason"] == "Extracted text object not found in storage."
+
+    @pytest.mark.integration
+    async def test_status_raw_data_endpoint_returns_extracted_text(self, app_mocked):
+        record = MagicMock()
+        record.drive_file_id = "file-1"
+        record.name = "Invoice-April.pdf"
+        record.mime_type = "application/pdf"
+        record.status = "embedded"
+        record.last_processed_at = datetime.now(timezone.utc)
+        record.minio_text_key = "file-1.txt"
+
+        with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
+            mock_repo = mock_repo_cls.return_value
+            mock_repo.list_by_status = AsyncMock(return_value=[record])
+            with patch("src.api.routes.MinIOStorage") as mock_storage_cls:
+                mock_storage = mock_storage_cls.return_value
+                mock_storage.download.return_value = b"Extracted invoice content"
+                async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                    response = await client.get("/status/raw-data")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert len(payload) == 1
+        assert payload[0]["name"] == "Invoice-April.pdf"
+        assert payload[0]["extracted_text"] == "Extracted invoice content"
 
     @pytest.mark.integration
     async def test_generate_sql_endpoint(self, app_mocked):
@@ -164,3 +228,38 @@ class TestAPIAuth:
             async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
                 response = await client.get("/status")
                 assert response.status_code == 200
+
+
+class TestGoogleOAuthCallbackRouting:
+    """Regression: GET /auth/google/callback must hit the API, not static 404."""
+
+    @pytest.mark.integration
+    async def test_oauth_callback_with_google_query_params_not_404(self, app_mocked):
+        async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+            response = await client.get(
+                "/auth/google/callback",
+                params={
+                    "code": "dummy-code",
+                    "state": "dummy-state",
+                    "iss": "https://accounts.google.com",
+                },
+            )
+        assert response.status_code != 404
+        assert response.status_code == 400
+
+
+class TestDriveBootstrap:
+    @pytest.mark.integration
+    async def test_drive_bootstrap_local_mode_is_chat_ready(self, app_mocked):
+        app_mocked.state.settings = Settings(ingest_source="local", local_source_folder="/tmp/docs")
+        with patch("src.api.drive_routes.MetadataRepository") as mock_repo_cls:
+            mock_repo = mock_repo_cls.return_value
+            mock_repo.get_drive_connection = AsyncMock(return_value=None)
+            mock_repo.list_by_status = AsyncMock(return_value=[])
+            async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                response = await client.get("/drive/bootstrap")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ingest_source"] == "local"
+        assert payload["chat_ready"] is True

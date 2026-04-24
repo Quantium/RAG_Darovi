@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 
-from src.metadata.repository import MetadataRepository
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from sqlalchemy.dialects.postgresql.dml import Insert as PostgresInsert
+from sqlalchemy.dialects.sqlite.dml import Insert as SQLiteInsert
+
+from src.metadata.repository import MetadataRepository, SyncMetadataRepository
 
 
 class TestMetadataRepository:
@@ -68,3 +74,25 @@ class TestMetadataRepository:
         await repo.update_page_token("new-token-123")
         token = await repo.get_page_token()
         assert token == "new-token-123"
+
+
+class TestSyncMetadataRepositoryDialectSafety:
+    async def test_update_page_token_uses_postgresql_insert_for_postgres_dialect(self):
+        session = MagicMock()
+        session.bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+        repo = SyncMetadataRepository(session)
+
+        await repo.update_page_token("token-123")
+
+        stmt = session.execute.call_args.args[0]
+        assert isinstance(stmt, PostgresInsert)
+
+    async def test_update_page_token_uses_sqlite_insert_for_sqlite_dialect(self):
+        session = MagicMock()
+        session.bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+        repo = SyncMetadataRepository(session)
+
+        await repo.update_page_token("token-123")
+
+        stmt = session.execute.call_args.args[0]
+        assert isinstance(stmt, SQLiteInsert)

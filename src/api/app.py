@@ -5,9 +5,12 @@ from contextlib import asynccontextmanager
 
 import redis
 import structlog
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from starlette.middleware.sessions import SessionMiddleware
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.requests import HTTPConnection
@@ -81,8 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    from src.api.drive_routes import drive_router
     from src.api.routes import router
 
+    session_settings = Settings()
     app = FastAPI(
         title="RAG Darovi",
         version="1.0.0",
@@ -94,17 +99,36 @@ def create_app() -> FastAPI:
     # before it's set. We'll handle auth in the router.
 
     app.add_middleware(
+        SessionMiddleware,
+        secret_key=session_settings.app_session_secret.get_secret_value(),
+        same_site="lax",
+        https_only=False,
+    )
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(drive_router)
     app.include_router(router)
 
-    # Static files mounted AFTER router — routes take priority, static is fallback
-    import os
+    # Explicit routes for the SPA assets. Do not use mount("/", StaticFiles(...)) at the
+    # application root: in some Starlette/FastAPI setups it shadows API routes such as
+    # GET /auth/google/callback (static handler looks for a file and returns 404).
+    static_root = Path(__file__).resolve().parent.parent.parent / "static"
+    if static_root.is_dir():
 
-    if os.path.exists("static"):
-        app.mount("/", StaticFiles(directory="static", html=True), name="static")
+        @app.get("/")
+        async def _serve_index() -> FileResponse:
+            return FileResponse(static_root / "index.html")
+
+        @app.get("/app.js")
+        async def _serve_app_js() -> FileResponse:
+            return FileResponse(static_root / "app.js", media_type="application/javascript")
+
+        @app.get("/styles.css")
+        async def _serve_styles() -> FileResponse:
+            return FileResponse(static_root / "styles.css", media_type="text/css")
 
     return app

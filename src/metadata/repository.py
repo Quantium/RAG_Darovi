@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy import DateTime, Integer, String, Text, delete, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -11,6 +12,19 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 class Base(DeclarativeBase):
     pass
+
+
+def _dialect_name_for_session(session: AsyncSession | Session) -> str:
+    bind = session.bind
+    if bind is None:
+        return "sqlite"
+    return bind.dialect.name
+
+
+def _upsert_insert_for_session(session: AsyncSession | Session, model: type[Base]):
+    if _dialect_name_for_session(session) == "postgresql":
+        return postgresql_insert(model)
+    return sqlite_insert(model)
 
 
 class FileRecord(Base):
@@ -35,6 +49,17 @@ class SyncState(Base):
 
     key: Mapped[str] = mapped_column(String, primary_key=True, default="drive_page_token")
     value: Mapped[str] = mapped_column(String, nullable=False, default="")
+
+
+class DriveConnection(Base):
+    """Single-tenant Google OAuth connection (one row)."""
+
+    __tablename__ = "drive_connection"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    refresh_token_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    selected_folder_id: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
 
 class MetadataRepository:
@@ -86,7 +111,7 @@ class MetadataRepository:
     async def upsert_file(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> None:
-        stmt = sqlite_insert(FileRecord).values(
+        stmt = _upsert_insert_for_session(self._session, FileRecord).values(
             drive_file_id=drive_file_id,
             name=name,
             mime_type=mime_type,
@@ -122,13 +147,43 @@ class MetadataRepository:
         return state.value
 
     async def update_page_token(self, token: str) -> None:
-        stmt = sqlite_insert(SyncState).values(key="drive_page_token", value=token)
+        stmt = _upsert_insert_for_session(self._session, SyncState).values(key="drive_page_token", value=token)
         stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value})
         await self._session.execute(stmt)
         await self._session.commit()
 
     async def delete_file_record(self, drive_file_id: str) -> None:
         await self._session.execute(delete(FileRecord).where(FileRecord.drive_file_id == drive_file_id))
+        await self._session.commit()
+
+    async def delete_all_file_records(self) -> None:
+        await self._session.execute(delete(FileRecord))
+        await self._session.commit()
+
+    async def get_drive_connection(self) -> DriveConnection | None:
+        result = await self._session.execute(select(DriveConnection).limit(1))
+        return result.scalar_one_or_none()
+
+    async def save_drive_oauth_token(self, refresh_token_enc: str) -> None:
+        row = await self.get_drive_connection()
+        now = datetime.now(timezone.utc)
+        if row is None:
+            row = DriveConnection(refresh_token_enc=refresh_token_enc, selected_folder_id="", updated_at=now)
+            self._session.add(row)
+        else:
+            row.refresh_token_enc = refresh_token_enc
+            row.updated_at = now
+        await self._session.commit()
+
+    async def set_drive_selected_folder(self, folder_id: str) -> None:
+        row = await self.get_drive_connection()
+        now = datetime.now(timezone.utc)
+        if row is None:
+            row = DriveConnection(refresh_token_enc="", selected_folder_id=folder_id, updated_at=now)
+            self._session.add(row)
+        else:
+            row.selected_folder_id = folder_id
+            row.updated_at = now
         await self._session.commit()
 
 
@@ -153,18 +208,21 @@ class SyncMetadataRepository:
         self._session.refresh(record)
         return record
 
-    def get_file(self, drive_file_id: str) -> FileRecord | None:
+    async def get_file(self, drive_file_id: str) -> FileRecord | None:
         return self._session.execute(
             select(FileRecord).where(FileRecord.drive_file_id == drive_file_id)
         ).scalar_one_or_none()
 
-    def update_status(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
+    def update_status_sync(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
         self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
             .values(status=status, error_message=error_message)
         )
         self._session.commit()
+
+    async def update_status(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
+        self.update_status_sync(drive_file_id, status, error_message)
 
     def update_last_processed_at(self, drive_file_id: str) -> None:
         self._session.execute(
@@ -179,13 +237,10 @@ class SyncMetadataRepository:
             return self._session.execute(select(FileRecord)).scalars().all()
         return self._session.execute(select(FileRecord).where(FileRecord.status == status)).scalars().all()
 
-    def upsert_file(
+    async def upsert_file(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> None:
-        # SQLite dialect specific upsert
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-        stmt = sqlite_insert(FileRecord).values(
+        stmt = _upsert_insert_for_session(self._session, FileRecord).values(
             drive_file_id=drive_file_id,
             name=name,
             mime_type=mime_type,
@@ -210,7 +265,7 @@ class SyncMetadataRepository:
         )
         self._session.commit()
 
-    def get_page_token(self) -> str:
+    async def get_page_token(self) -> str:
         state = self._session.execute(select(SyncState).where(SyncState.key == "drive_page_token")).scalar_one_or_none()
         if not state:
             state = SyncState(key="drive_page_token", value="")
@@ -219,16 +274,24 @@ class SyncMetadataRepository:
             self._session.refresh(state)
         return state.value
 
-    def update_page_token(self, token: str) -> None:
-        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-
-        stmt = sqlite_insert(SyncState).values(key="drive_page_token", value=token)
+    async def update_page_token(self, token: str) -> None:
+        stmt = _upsert_insert_for_session(self._session, SyncState).values(key="drive_page_token", value=token)
         stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value})
         self._session.execute(stmt)
         self._session.commit()
 
-    def delete_file_record(self, drive_file_id: str) -> None:
+    def delete_file_record_sync(self, drive_file_id: str) -> None:
         self._session.execute(delete(FileRecord).where(FileRecord.drive_file_id == drive_file_id))
+        self._session.commit()
+
+    async def delete_file_record(self, drive_file_id: str) -> None:
+        self.delete_file_record_sync(drive_file_id)
+
+    def get_drive_connection_sync(self) -> DriveConnection | None:
+        return self._session.execute(select(DriveConnection).limit(1)).scalar_one_or_none()
+
+    def delete_all_file_records_sync(self) -> None:
+        self._session.execute(delete(FileRecord))
         self._session.commit()
 
 
