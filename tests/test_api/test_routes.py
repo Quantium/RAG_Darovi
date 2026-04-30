@@ -151,6 +151,17 @@ class TestAPIRoutes:
                     assert "job_id" in response.json()
 
     @pytest.mark.integration
+    async def test_ingest_endpoint_dispatches_job(self, app_mocked):
+        with patch("src.worker.tasks.run_incremental_sync.delay") as mock_delay:
+            async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                response = await client.post("/ingest")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "queued"
+        mock_delay.assert_called_once()
+
+    @pytest.mark.integration
     async def test_generate_sql_poll(self, app_mocked):
         with patch("redis.Redis.from_url") as mock_redis:
             mock_client = mock_redis.return_value

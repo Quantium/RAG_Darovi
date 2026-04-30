@@ -146,6 +146,7 @@ def convert_file(self, download_result: dict) -> dict:
 
         text_key = f"{drive_file_id}.txt"
         storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
+        repo.update_text_key_sync(drive_file_id, text_key)
         repo.update_status_sync(drive_file_id, "converted")
 
         task_logger.info("task.completed", text_key=text_key)

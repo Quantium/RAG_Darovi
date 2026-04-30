@@ -25,6 +25,8 @@ const state = {
     activeTab: "chat",
     documentStatusFilter: "all",
     documentStatusFiles: [],
+    ingestRunning: false,
+    ingestPollTimer: null,
 };
 
 // UI Elements
@@ -48,6 +50,10 @@ const documentStatusPanel = document.getElementById("document-status-panel");
 const documentStatusTableBody = document.querySelector("#document-status-table tbody");
 const documentStatusEmpty = document.getElementById("document-status-empty");
 const refreshDocumentStatusBtn = document.getElementById("refresh-document-status");
+const ingestBtn = document.getElementById("ingest-btn");
+const ingestStatus = document.getElementById("ingest-status");
+const ingestStatusLabel = document.getElementById("ingest-status-label");
+const ingestStatusCurrentFile = document.getElementById("ingest-status-current-file");
 const documentStatusFilterButtons = document.querySelectorAll(".document-status-filter");
 const rawDataPanel = document.getElementById("raw-data-panel");
 const rawDataTableBody = document.querySelector("#raw-data-table tbody");
@@ -126,6 +132,9 @@ function renderDocumentStatusRows(files) {
         const row = document.createElement("tr");
         const extractionStatus = extractionStatusForPipelineStatus(file.status);
         const rawTextAvailable = file.raw_text_available === true;
+        if (!rawTextAvailable) {
+            row.classList.add("row-missing-text");
+        }
         const rawTextStatus = rawTextAvailable ? "Yes" : "No";
         const rawTextMissingReason = !rawTextAvailable && file.raw_text_missing_reason
             ? `<div class="raw-text-missing-reason">${escapeHtml(file.raw_text_missing_reason)}</div>`
@@ -142,6 +151,85 @@ function renderDocumentStatusRows(files) {
         `;
         documentStatusTableBody.appendChild(row);
     });
+}
+
+function ingestingFileLabel(files) {
+    const inProgress = files.find((file) => ["pending", "downloaded", "converted"].includes(file.status || ""));
+    if (!inProgress) return "Waiting for pipeline updates...";
+    const name = inProgress.name || inProgress.drive_file_id || "Unknown file";
+    const status = inProgress.status || "pending";
+    return `Current file: ${name} (${status})`;
+}
+
+async function refreshIngestStatus() {
+    try {
+        const statusRes = await fetch("/status", { headers: apiHeaders() });
+        if (!statusRes.ok) throw new Error(`status ${statusRes.status}`);
+        const status = await statusRes.json();
+        await loadDocumentStatus();
+
+        if (!ingestStatus || !ingestStatusLabel || !ingestStatusCurrentFile) return;
+        const processingCount = Number(status.pending || 0) + Number(status.downloaded || 0) + Number(status.converted || 0);
+        const failed = Number(status.failed || 0);
+        ingestStatusLabel.textContent = `Ingestion running... ${processingCount} files in pipeline${failed > 0 ? `, ${failed} failed` : ""}.`;
+        ingestStatusCurrentFile.textContent = ingestingFileLabel(state.documentStatusFiles);
+
+        if (processingCount === 0) {
+            state.ingestRunning = false;
+            if (state.ingestPollTimer) {
+                clearInterval(state.ingestPollTimer);
+                state.ingestPollTimer = null;
+            }
+            ingestStatusLabel.textContent = "Ingestion finished.";
+            ingestStatusCurrentFile.textContent = failed > 0
+                ? "Review the table for failed files and missing extracted text."
+                : "All files finished processing.";
+            if (ingestBtn) ingestBtn.disabled = false;
+            setTimeout(() => {
+                if (!state.ingestRunning && ingestStatus) ingestStatus.hidden = true;
+            }, 4000);
+        }
+    } catch (err) {
+        if (ingestStatusLabel) {
+            ingestStatusLabel.textContent = `Could not refresh ingestion status: ${err.message || String(err)}`;
+        }
+        if (ingestStatusCurrentFile) {
+            ingestStatusCurrentFile.textContent = "Check API availability and worker logs.";
+        }
+        if (ingestBtn) ingestBtn.disabled = false;
+        state.ingestRunning = false;
+        if (state.ingestPollTimer) {
+            clearInterval(state.ingestPollTimer);
+            state.ingestPollTimer = null;
+        }
+    }
+}
+
+async function triggerIngest() {
+    const confirmed = window.confirm(
+        "Esta acción iniciará una nueva ingesta y los cambios anteriores se perderán. ¿Deseas continuar?"
+    );
+    if (!confirmed) return;
+
+    const res = await fetch("/ingest", {
+        method: "POST",
+        headers: apiHeaders(),
+    });
+    if (!res.ok) {
+        throw new Error(`ingest ${res.status}`);
+    }
+
+    state.ingestRunning = true;
+    if (ingestBtn) ingestBtn.disabled = true;
+    if (ingestStatus) ingestStatus.hidden = false;
+    if (ingestStatusLabel) ingestStatusLabel.textContent = "Ingestion queued. Waiting for worker...";
+    if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Preparing first file...";
+
+    if (state.ingestPollTimer) clearInterval(state.ingestPollTimer);
+    state.ingestPollTimer = setInterval(() => {
+        refreshIngestStatus().catch((e) => console.error("ingest status", e));
+    }, 2500);
+    await refreshIngestStatus();
 }
 
 function filteredDocumentStatusFiles() {
@@ -396,6 +484,14 @@ tabDocumentStatus?.addEventListener("click", () => setActiveTab("document-status
 tabRawData?.addEventListener("click", () => setActiveTab("raw-data"));
 refreshDocumentStatusBtn?.addEventListener("click", () => {
     loadDocumentStatus().catch((e) => console.error("document status", e));
+});
+ingestBtn?.addEventListener("click", () => {
+    triggerIngest().catch((e) => {
+        if (ingestStatus) ingestStatus.hidden = false;
+        if (ingestStatusLabel) ingestStatusLabel.textContent = `Ingestion error: ${e.message || String(e)}`;
+        if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Please retry and check worker logs.";
+        if (ingestBtn) ingestBtn.disabled = false;
+    });
 });
 documentStatusFilterButtons.forEach((button) => {
     button.addEventListener("click", () => {

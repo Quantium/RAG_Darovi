@@ -16,6 +16,7 @@ from src.api.schemas import (
     FileStatusItem,
     GenerateSQLRequest,
     GenerateSQLResponse,
+    IngestResponse,
     RawDataItem,
     SourceReference,
     StatusResponse,
@@ -183,6 +184,14 @@ async def create_automation(body: AutomationRequest) -> AutomationResponse:
         return AutomationResponse(name=config.name, trigger=config.trigger, status="created")
     except (ValueError, Exception) as exc:
         return AutomationResponse(name="", trigger="", status="error", message=str(exc))
+
+
+@router.post("/ingest", response_model=IngestResponse, dependencies=[Depends(verify_api_key)])
+async def ingest_documents() -> IngestResponse:
+    from src.worker.tasks import run_incremental_sync
+
+    run_incremental_sync.delay()
+    return IngestResponse(status="queued", message="Ingestion job queued.")
 
 
 @router.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_api_key)])

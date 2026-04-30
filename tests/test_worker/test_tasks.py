@@ -53,7 +53,8 @@ class TestWorkerTasks:
     @patch("src.converter.get_converter")
     @patch("src.worker.tasks.build_metadata_repo")
     def test_convert_task_calls_converter(self, mock_repo_builder, mock_get_converter, mock_storage_builder):
-        mock_repo_builder.return_value = (MagicMock(), lambda: None)
+        mock_repo = MagicMock()
+        mock_repo_builder.return_value = (mock_repo, lambda: None)
         mock_storage = MagicMock()
         mock_storage_builder.return_value = mock_storage
         mock_storage.download.return_value = b"pdf bytes"
@@ -71,6 +72,7 @@ class TestWorkerTasks:
             }
         )
         assert "minio_text_key" in result
+        mock_repo.update_text_key_sync.assert_called_once_with("f1", "f1.txt")
         mock_converter.convert.assert_called_once()
 
     def test_embed_task_calls_embedder(self):

@@ -64,11 +64,19 @@
             <div class="document-status-header">
                 <h2>OCR extraction status</h2>
                 <div class="document-status-header-actions">
+                    <button id="ingest-btn" type="button">Ingest</button>
                     <div id="document-status-filters" class="document-status-filters" role="group" aria-label="Document status filters">
                         <button type="button" class="document-status-filter active" data-filter="all">All</button>
                         <button type="button" class="document-status-filter" data-filter="raw-text-missing">Raw text missing</button>
                     </div>
                     <button id="refresh-document-status" type="button">Refresh</button>
+                </div>
+            </div>
+            <div id="ingest-status" class="ingest-status" hidden>
+                <span class="ingest-status__spinner" aria-hidden="true"></span>
+                <div class="ingest-status__content">
+                    <p id="ingest-status-label">Ingestion in progress...</p>
+                    <p id="ingest-status-current-file" class="ingest-status__current-file"></p>
                 </div>
             </div>
             <p id="document-status-empty" class="document-status-empty" hidden>No documents found yet.</p>

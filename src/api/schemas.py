@@ -79,6 +79,11 @@ class RawDataItem(BaseModel):
     extracted_text: Optional[str]
 
 
+class IngestResponse(BaseModel):
+    status: str
+    message: str
+
+
 class DriveBootstrapResponse(BaseModel):
     ingest_source: str = "drive"
     oauth_configured: bool

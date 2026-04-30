@@ -136,6 +136,14 @@ class MetadataRepository:
         )
         await self._session.commit()
 
+    async def update_text_key(self, drive_file_id: str, minio_text_key: str) -> None:
+        await self._session.execute(
+            update(FileRecord)
+            .where(FileRecord.drive_file_id == drive_file_id)
+            .values(minio_text_key=minio_text_key)
+        )
+        await self._session.commit()
+
     async def get_page_token(self) -> str:
         result = await self._session.execute(select(SyncState).where(SyncState.key == "drive_page_token"))
         state = result.scalar_one_or_none()
@@ -262,6 +270,14 @@ class SyncMetadataRepository:
     def update_chunk_count(self, drive_file_id: str, count: int) -> None:
         self._session.execute(
             update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(chunk_count=count)
+        )
+        self._session.commit()
+
+    def update_text_key_sync(self, drive_file_id: str, minio_text_key: str) -> None:
+        self._session.execute(
+            update(FileRecord)
+            .where(FileRecord.drive_file_id == drive_file_id)
+            .values(minio_text_key=minio_text_key)
         )
         self._session.commit()
 
