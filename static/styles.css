@@ -206,6 +206,17 @@ button:hover {
     background-color: var(--sidebar-bg);
 }
 
+.danger-btn {
+    background-color: #dc2626;
+    border-color: #dc2626;
+    color: #fff;
+}
+
+.danger-btn:hover {
+    background-color: #b91c1c;
+    border-color: #b91c1c;
+}
+
 .main-layout {
     display: flex;
     flex: 1;
@@ -380,6 +391,16 @@ button:hover {
     margin-top: 0.25rem;
     font-size: 0.75rem;
     opacity: 0.82;
+}
+
+.file-link {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.file-link:hover {
+    opacity: 0.85;
 }
 
 #filters {

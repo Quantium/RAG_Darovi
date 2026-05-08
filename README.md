@@ -70,6 +70,19 @@ The chat model is selected through `.env`:
 
 `DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com/v1/` and can be overridden if needed.
 
+### OCR extraction tuning
+
+PDF conversion uses `pdfplumber` first and conditionally falls back to OCR with Tesseract. You can tune OCR behavior with `.env`:
+
+- `OCR_LANGUAGE` (default `eng`): language passed to Tesseract (`eng`, `spa`, `spa+eng`, etc.).
+- `OCR_DPI` (default `300`): rasterization DPI for `pdf2image`.
+- `OCR_PSM` (default empty): optional Tesseract page segmentation mode.
+- `OCR_MIN_TEXT_CHARS` (default `40`): minimum non-whitespace chars to trust text-layer extraction.
+- `OCR_MIN_ALPHA_RATIO` (default `0.45`): minimum alphabetic ratio to trust extracted text.
+- `OCR_MAX_SINGLE_CHAR_LINE_RATIO` (default `0.6`): upper bound for single-char line ratio before considering text low-quality.
+
+When a page is classified as low quality, the converter attempts OCR and logs the fallback reason in structured logs.
+
 ## Local Python environment
 
 Use a virtual environment so dependencies stay isolated (aligned with [AGENTS.md](AGENTS.md)):

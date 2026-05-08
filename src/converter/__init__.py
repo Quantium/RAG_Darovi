@@ -5,6 +5,7 @@ import structlog
 from src.converter.base import FileConverter
 from src.converter.docs_converter import DocsConverter
 from src.converter.docx_converter import DocxConverter
+from src.converter.image_converter import ImageConverter
 from src.converter.pdf_converter import PdfConverter
 from src.converter.sheets_converter import SheetsConverter
 from src.converter.text_converter import TextConverter
@@ -22,6 +23,11 @@ _CONVERTERS: dict[str, type[FileConverter]] = {
     "text/markdown": TextConverter,
     "text/html": TextConverter,
     "text/csv": SheetsConverter,
+    "image/png": ImageConverter,
+    "image/jpeg": ImageConverter,
+    "image/jpg": ImageConverter,
+    "image/tiff": ImageConverter,
+    "image/webp": ImageConverter,
 }
 
 

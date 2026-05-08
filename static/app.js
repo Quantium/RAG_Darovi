@@ -51,6 +51,7 @@ const documentStatusTableBody = document.querySelector("#document-status-table t
 const documentStatusEmpty = document.getElementById("document-status-empty");
 const refreshDocumentStatusBtn = document.getElementById("refresh-document-status");
 const ingestBtn = document.getElementById("ingest-btn");
+const restartIngestBtn = document.getElementById("restart-ingest-btn");
 const ingestStatus = document.getElementById("ingest-status");
 const ingestStatusLabel = document.getElementById("ingest-status-label");
 const ingestStatusCurrentFile = document.getElementById("ingest-status-current-file");
@@ -117,6 +118,16 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;");
 }
 
+function fileOpenUrl(driveFileId) {
+    const encodedId = encodeURIComponent(String(driveFileId || ""));
+    const params = new URLSearchParams();
+    if (state.apiKey) {
+        params.set("api_key", state.apiKey);
+    }
+    const qs = params.toString();
+    return `/files/${encodedId}/open${qs ? `?${qs}` : ""}`;
+}
+
 function extractionStatusForPipelineStatus(pipelineStatus) {
     if (pipelineStatus === "embedded" || pipelineStatus === "converted") return "completed";
     if (pipelineStatus === "failed") return "failed";
@@ -140,7 +151,7 @@ function renderDocumentStatusRows(files) {
             ? `<div class="raw-text-missing-reason">${escapeHtml(file.raw_text_missing_reason)}</div>`
             : "";
         row.innerHTML = `
-            <td>${escapeHtml(file.name || file.drive_file_id)}</td>
+            <td><a class="file-link" href="${fileOpenUrl(file.drive_file_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(file.name || file.drive_file_id)}</a></td>
             <td>${escapeHtml(file.mime_type || "-")}</td>
             <td><span class="status-pill">${escapeHtml(file.status || "pending")}</span></td>
             <td><span class="status-pill">${escapeHtml(extractionStatus)}</span></td>
@@ -185,6 +196,7 @@ async function refreshIngestStatus() {
                 ? "Review the table for failed files and missing extracted text."
                 : "All files finished processing.";
             if (ingestBtn) ingestBtn.disabled = false;
+            if (restartIngestBtn) restartIngestBtn.disabled = false;
             setTimeout(() => {
                 if (!state.ingestRunning && ingestStatus) ingestStatus.hidden = true;
             }, 4000);
@@ -197,6 +209,7 @@ async function refreshIngestStatus() {
             ingestStatusCurrentFile.textContent = "Check API availability and worker logs.";
         }
         if (ingestBtn) ingestBtn.disabled = false;
+        if (restartIngestBtn) restartIngestBtn.disabled = false;
         state.ingestRunning = false;
         if (state.ingestPollTimer) {
             clearInterval(state.ingestPollTimer);
@@ -221,9 +234,38 @@ async function triggerIngest() {
 
     state.ingestRunning = true;
     if (ingestBtn) ingestBtn.disabled = true;
+    if (restartIngestBtn) restartIngestBtn.disabled = true;
     if (ingestStatus) ingestStatus.hidden = false;
     if (ingestStatusLabel) ingestStatusLabel.textContent = "Ingestion queued. Waiting for worker...";
     if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Preparing first file...";
+
+    if (state.ingestPollTimer) clearInterval(state.ingestPollTimer);
+    state.ingestPollTimer = setInterval(() => {
+        refreshIngestStatus().catch((e) => console.error("ingest status", e));
+    }, 2500);
+    await refreshIngestStatus();
+}
+
+async function triggerRestartIngest() {
+    const confirmed = window.confirm(
+        "Esta acción reiniciará la ingesta: intentará limpiar MinIO/Milvus/metadata y luego lanzará una nueva ingesta. ¿Deseas continuar?"
+    );
+    if (!confirmed) return;
+
+    const res = await fetch("/ingest/restart", {
+        method: "POST",
+        headers: apiHeaders(),
+    });
+    if (!res.ok) {
+        throw new Error(`ingest/restart ${res.status}`);
+    }
+
+    state.ingestRunning = true;
+    if (ingestBtn) ingestBtn.disabled = true;
+    if (restartIngestBtn) restartIngestBtn.disabled = true;
+    if (ingestStatus) ingestStatus.hidden = false;
+    if (ingestStatusLabel) ingestStatusLabel.textContent = "Restart ingestion queued. Cleaning previous artifacts...";
+    if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Waiting for worker tasks...";
 
     if (state.ingestPollTimer) clearInterval(state.ingestPollTimer);
     state.ingestPollTimer = setInterval(() => {
@@ -272,7 +314,7 @@ function renderRawDataRows(items) {
         const extractedText = item.extracted_text?.trim() || "No extracted text available yet.";
         const isLongText = extractedText.length > previewThreshold;
         row.innerHTML = `
-            <td>${escapeHtml(item.name || item.drive_file_id)}</td>
+            <td><a class="file-link" href="${fileOpenUrl(item.drive_file_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.name || item.drive_file_id)}</a></td>
             <td>${escapeHtml(item.mime_type || "-")}</td>
             <td><span class="status-pill">${escapeHtml(item.status || "pending")}</span></td>
             <td>${escapeHtml(item.last_processed_at || "-")}</td>
@@ -491,6 +533,16 @@ ingestBtn?.addEventListener("click", () => {
         if (ingestStatusLabel) ingestStatusLabel.textContent = `Ingestion error: ${e.message || String(e)}`;
         if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Please retry and check worker logs.";
         if (ingestBtn) ingestBtn.disabled = false;
+        if (restartIngestBtn) restartIngestBtn.disabled = false;
+    });
+});
+restartIngestBtn?.addEventListener("click", () => {
+    triggerRestartIngest().catch((e) => {
+        if (ingestStatus) ingestStatus.hidden = false;
+        if (ingestStatusLabel) ingestStatusLabel.textContent = `Restart ingestion error: ${e.message || String(e)}`;
+        if (ingestStatusCurrentFile) ingestStatusCurrentFile.textContent = "Please retry and check worker logs.";
+        if (ingestBtn) ingestBtn.disabled = false;
+        if (restartIngestBtn) restartIngestBtn.disabled = false;
     });
 });
 documentStatusFilterButtons.forEach((button) => {

@@ -142,6 +142,46 @@ class TestAPIRoutes:
         assert payload[0]["extracted_text"] == "Extracted invoice content"
 
     @pytest.mark.integration
+    async def test_open_file_redirects_to_google_drive_in_drive_mode(self, app_mocked):
+        app_mocked.state.settings = Settings(ingest_source="drive")
+        record = MagicMock()
+        record.drive_file_id = "file-1"
+        record.name = "Invoice-April.pdf"
+        record.mime_type = "application/pdf"
+        record.minio_raw_key = "file-1/Invoice-April.pdf"
+
+        with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
+            mock_repo = mock_repo_cls.return_value
+            mock_repo.get_file = AsyncMock(return_value=record)
+            async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                response = await client.get("/files/file-1/open", follow_redirects=False)
+
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://drive.google.com/open?id=file-1"
+
+    @pytest.mark.integration
+    async def test_open_file_streams_raw_file_in_local_mode(self, app_mocked):
+        app_mocked.state.settings = Settings(ingest_source="local")
+        record = MagicMock()
+        record.drive_file_id = "file-1"
+        record.name = "report.txt"
+        record.mime_type = "text/plain"
+        record.minio_raw_key = "file-1/report.txt"
+
+        with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
+            mock_repo = mock_repo_cls.return_value
+            mock_repo.get_file = AsyncMock(return_value=record)
+            with patch("src.api.routes.MinIOStorage") as mock_storage_cls:
+                mock_storage = mock_storage_cls.return_value
+                mock_storage.download.return_value = b"hello world"
+                async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                    response = await client.get("/files/file-1/open")
+
+        assert response.status_code == 200
+        assert response.text == "hello world"
+        assert response.headers["content-type"].startswith("text/plain")
+
+    @pytest.mark.integration
     async def test_generate_sql_endpoint(self, app_mocked):
         with patch("redis.Redis.from_url"):
             with patch("src.worker.tasks.run_sql_generation.delay"):
@@ -155,6 +195,17 @@ class TestAPIRoutes:
         with patch("src.worker.tasks.run_incremental_sync.delay") as mock_delay:
             async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
                 response = await client.post("/ingest")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "queued"
+        mock_delay.assert_called_once()
+
+    @pytest.mark.integration
+    async def test_restart_ingest_endpoint_dispatches_job(self, app_mocked):
+        with patch("src.worker.tasks.restart_ingest.delay") as mock_delay:
+            async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
+                response = await client.post("/ingest/restart")
 
         assert response.status_code == 200
         payload = response.json()

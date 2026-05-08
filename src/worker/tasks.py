@@ -90,6 +90,7 @@ def download_file(self, file_meta: dict) -> dict:
             task_logger.info("task.skipped")
             return {"skipped": True, "drive_file_id": file_meta["id"]}
 
+        repo.update_raw_key_sync(file_meta["id"], minio_key)
         task_logger.info("task.completed", minio_key=minio_key)
         return {
             "drive_file_id": file_meta["id"],
@@ -288,6 +289,82 @@ def delete_file_vectors(self, drive_file_id: str) -> dict:
         repo.delete_file_record_sync(drive_file_id)
         task_logger.info("task.completed")
         return {"drive_file_id": drive_file_id, "deleted": True}
+    except Exception as exc:
+        task_logger.error("task.failed", error=str(exc))
+        raise
+    finally:
+        cleanup()
+
+
+@app.task(base=RetryableTask, bind=True)
+def restart_ingest(self) -> dict:
+    """Clean previous ingestion artifacts, then queue a fresh incremental sync."""
+    from src.vectorizer.milvus_store import MilvusStore
+
+    headers: dict[str, str] = {}
+    if hasattr(self, "request") and self.request:
+        headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    task_logger = logger.bind(trace_id=trace_id, task="restart_ingest")
+    task_logger.info("task.started")
+
+    settings = build_settings()
+    storage = build_storage(settings)
+    repo, cleanup = build_metadata_repo(settings)
+
+    vectors_removed = 0
+    storage_deleted = 0
+    storage_delete_failures = 0
+    records_deleted = 0
+
+    def _delete_object(bucket: str, key: str | None) -> None:
+        nonlocal storage_deleted, storage_delete_failures
+        if not key:
+            return
+        try:
+            storage.delete(bucket, key)
+            storage_deleted += 1
+        except Exception as exc:  # best-effort cleanup
+            storage_delete_failures += 1
+            task_logger.debug("restart_ingest.storage_delete_failed", bucket=bucket, key=key, error=str(exc))
+
+    try:
+        store = MilvusStore(settings)
+        records = repo.list_by_status(None)
+        for record in records:
+            drive_file_id = record.drive_file_id
+            try:
+                store.delete_by_source(drive_file_id)
+                vectors_removed += 1
+            except Exception as exc:  # best-effort cleanup
+                task_logger.warning("restart_ingest.vector_delete_failed", drive_file_id=drive_file_id, error=str(exc))
+
+            raw_candidates = [record.minio_raw_key, f"{drive_file_id}/{record.name}", drive_file_id]
+            text_candidates = [record.minio_text_key, f"{drive_file_id}.txt"]
+            for key in raw_candidates:
+                _delete_object(settings.minio_bucket_raw, key)
+            for key in text_candidates:
+                _delete_object(settings.minio_bucket_text, key)
+
+        records_deleted = len(records)
+        repo.delete_all_file_records_sync()
+        asyncio.run(repo.update_page_token(""))
+
+        run_incremental_sync.delay(headers={"trace_id": trace_id})
+        task_logger.info(
+            "task.completed",
+            vectors_removed=vectors_removed,
+            storage_deleted=storage_deleted,
+            storage_delete_failures=storage_delete_failures,
+            records_deleted=records_deleted,
+        )
+        return {
+            "status": "queued",
+            "vectors_removed": vectors_removed,
+            "storage_deleted": storage_deleted,
+            "storage_delete_failures": storage_delete_failures,
+            "records_deleted": records_deleted,
+        }
     except Exception as exc:
         task_logger.error("task.failed", error=str(exc))
         raise

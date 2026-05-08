@@ -6,6 +6,7 @@ from uuid import uuid4
 import redis
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.schemas import (
@@ -29,6 +30,17 @@ from src.storage.backend import MinIOStorage
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+def _verify_api_key_for_file_open(request: Request) -> None:
+    configured_key = request.app.state.settings.api_key.get_secret_value()
+    if not configured_key:
+        return
+    header_key = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    query_key = request.query_params.get("api_key")
+    provided_key = header_key or query_key or ""
+    if provided_key != configured_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 def _chunk_to_source(c: RetrievedChunk) -> SourceReference:
@@ -192,6 +204,50 @@ async def ingest_documents() -> IngestResponse:
 
     run_incremental_sync.delay()
     return IngestResponse(status="queued", message="Ingestion job queued.")
+
+
+@router.post("/ingest/restart", response_model=IngestResponse, dependencies=[Depends(verify_api_key)])
+async def restart_ingest_documents() -> IngestResponse:
+    from src.worker.tasks import restart_ingest
+
+    restart_ingest.delay()
+    return IngestResponse(status="queued", message="Restart ingestion job queued.")
+
+
+@router.get("/files/{drive_file_id}/open")
+async def open_file(request: Request, drive_file_id: str) -> Response:
+    from src.metadata.repository import MetadataRepository
+
+    _verify_api_key_for_file_open(request)
+
+    settings = request.app.state.settings
+    async with AsyncSession(request.app.state.engine) as session:
+        repo = MetadataRepository(session)
+        file_record = await repo.get_file(drive_file_id)
+
+    if file_record is None:
+        raise HTTPException(status_code=404, detail="File record not found")
+
+    if settings.ingest_source == "drive":
+        return RedirectResponse(url=f"https://drive.google.com/open?id={drive_file_id}", status_code=302)
+
+    minio_raw_key = getattr(file_record, "minio_raw_key", None)
+    if not minio_raw_key:
+        raise HTTPException(status_code=404, detail="Raw file not available")
+
+    storage = MinIOStorage(settings)
+    try:
+        raw_bytes = storage.download(settings.minio_bucket_raw, minio_raw_key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Raw file object not found in storage") from exc
+
+    file_name = (getattr(file_record, "name", None) or drive_file_id).replace('"', "")
+    mime_type = getattr(file_record, "mime_type", None) or "application/octet-stream"
+    return Response(
+        content=raw_bytes,
+        media_type=mime_type,
+        headers={"Content-Disposition": f'inline; filename="{file_name}"'},
+    )
 
 
 @router.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_api_key)])

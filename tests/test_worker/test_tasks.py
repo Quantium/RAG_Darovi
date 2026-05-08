@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock, ANY
 
-from src.worker.tasks import download_file, convert_file, embed_file, run_incremental_sync, delete_file_vectors
+from src.worker.tasks import (
+    download_file,
+    convert_file,
+    embed_file,
+    run_incremental_sync,
+    delete_file_vectors,
+    restart_ingest,
+)
 from src.worker.celery_app import RetryableTask
 from config.settings import Settings
 
@@ -178,3 +185,33 @@ class TestWorkerTasks:
         )
         assert result.get("skipped") is True
         mock_repo.update_status_sync.assert_called_with("f1", "skipped", error_message="Unsupported MIME: video/mp4")
+
+    @patch("src.vectorizer.milvus_store.MilvusStore")
+    @patch("src.worker.tasks.run_incremental_sync")
+    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.tasks.build_storage")
+    @patch("src.worker.tasks.build_settings")
+    def test_restart_ingest_cleans_and_requeues(
+        self, _mock_settings, mock_storage_builder, mock_repo_builder, mock_run_incremental_sync, mock_milvus_store_cls
+    ):
+        mock_repo = MagicMock()
+        record = MagicMock()
+        record.drive_file_id = "f1"
+        record.name = "test.pdf"
+        record.minio_raw_key = "f1/test.pdf"
+        record.minio_text_key = "f1.txt"
+        mock_repo.list_by_status.return_value = [record]
+        mock_repo.update_page_token = AsyncMock(return_value=None)
+        mock_repo_builder.return_value = (mock_repo, lambda: None)
+        mock_storage = MagicMock()
+        mock_storage_builder.return_value = mock_storage
+        mock_milvus_store = mock_milvus_store_cls.return_value
+
+        result = restart_ingest()
+
+        mock_milvus_store.delete_by_source.assert_called_once_with("f1")
+        mock_storage.delete.assert_any_call(ANY, "f1/test.pdf")
+        mock_storage.delete.assert_any_call(ANY, "f1.txt")
+        mock_repo.delete_all_file_records_sync.assert_called_once()
+        mock_run_incremental_sync.delay.assert_called_once_with(headers={"trace_id": ANY})
+        assert result["status"] == "queued"

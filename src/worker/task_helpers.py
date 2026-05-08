@@ -57,6 +57,11 @@ MIME_TO_DOC_TYPE: dict[str, str] = {
     "text/markdown": "doc",
     "text/html": "html",
     "text/csv": "sheet",
+    "image/png": "image",
+    "image/jpeg": "image",
+    "image/jpg": "image",
+    "image/tiff": "image",
+    "image/webp": "image",
 }
 
 

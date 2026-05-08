@@ -75,6 +75,27 @@ class Settings(BaseSettings):
     # Scheduler
     sync_interval_hours: int = 24
 
+    # OCR (legacy Tesseract; kept as fallback when vision is unavailable)
+    ocr_language: str = "eng"
+    ocr_dpi: int = 300
+    ocr_psm: str = ""
+    ocr_min_text_chars: int = 40
+    ocr_min_alpha_ratio: float = 0.45
+    ocr_max_single_char_line_ratio: float = 0.6
+
+    # Vision-Language Model (Llama-3.2-Vision via Ollama)
+    # Replaces Tesseract OCR with a structured text + key-value extractor.
+    vision_enabled: bool = True
+    vision_base_url: str = "http://localhost:11436"
+    vision_model: str = "llama3.2-vision:11b"
+    vision_request_timeout_s: int = 180
+    vision_max_image_mb: int = 8
+    vision_max_pages_per_request: int = 1
+    vision_circuit_breaker_threshold: int = 5
+    vision_circuit_breaker_reset_s: int = 300
+    vision_fallback_to_tesseract: bool = True
+    vision_downscale_dpi: int = 200
+
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -91,5 +112,61 @@ class Settings(BaseSettings):
         if normalized not in {"drive", "local"}:
             raise ValueError("ingest_source must be one of: drive, local")
         return normalized
+
+    @field_validator("ocr_dpi")
+    @classmethod
+    def _validate_ocr_dpi(cls, value: int) -> int:
+        if value < 72 or value > 600:
+            raise ValueError("ocr_dpi must be between 72 and 600")
+        return value
+
+    @field_validator("ocr_min_text_chars")
+    @classmethod
+    def _validate_ocr_min_text_chars(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("ocr_min_text_chars must be >= 1")
+        return value
+
+    @field_validator("ocr_min_alpha_ratio")
+    @classmethod
+    def _validate_ocr_min_alpha_ratio(cls, value: float) -> float:
+        if value < 0.0 or value > 1.0:
+            raise ValueError("ocr_min_alpha_ratio must be between 0.0 and 1.0")
+        return value
+
+    @field_validator("ocr_max_single_char_line_ratio")
+    @classmethod
+    def _validate_ocr_max_single_char_line_ratio(cls, value: float) -> float:
+        if value < 0.0 or value > 1.0:
+            raise ValueError("ocr_max_single_char_line_ratio must be between 0.0 and 1.0")
+        return value
+
+    @field_validator("vision_max_image_mb")
+    @classmethod
+    def _validate_vision_max_image_mb(cls, value: int) -> int:
+        if value < 1 or value > 50:
+            raise ValueError("vision_max_image_mb must be between 1 and 50")
+        return value
+
+    @field_validator("vision_request_timeout_s")
+    @classmethod
+    def _validate_vision_request_timeout_s(cls, value: int) -> int:
+        if value < 5 or value > 1800:
+            raise ValueError("vision_request_timeout_s must be between 5 and 1800")
+        return value
+
+    @field_validator("vision_circuit_breaker_threshold")
+    @classmethod
+    def _validate_vision_circuit_breaker_threshold(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("vision_circuit_breaker_threshold must be >= 1")
+        return value
+
+    @field_validator("vision_downscale_dpi")
+    @classmethod
+    def _validate_vision_downscale_dpi(cls, value: int) -> int:
+        if value < 72 or value > 600:
+            raise ValueError("vision_downscale_dpi must be between 72 and 600")
+        return value
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
