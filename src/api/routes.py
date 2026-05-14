@@ -258,7 +258,17 @@ async def get_status(request: Request) -> StatusResponse:
         repo = MetadataRepository(session)
         files = await repo.list_by_status(None)  # Assuming None lists all
 
-    counts = {"pending": 0, "downloaded": 0, "converted": 0, "embedded": 0, "failed": 0, "skipped": 0}
+    counts = {
+        "pending": 0,
+        "downloaded": 0,
+        "converted": 0,
+        "embedded": 0,
+        "failed": 0,
+        "skipped": 0,
+        "vision_pending": 0,
+        "vision_processing": 0,
+        "vision_failed": 0,
+    }
     for f in files:
         if f.status in counts:
             counts[f.status] += 1
@@ -272,6 +282,9 @@ async def get_status(request: Request) -> StatusResponse:
         converted=counts["converted"],
         embedded=counts["embedded"],
         failed=counts["failed"],
+        vision_pending=counts["vision_pending"],
+        vision_processing=counts["vision_processing"],
+        vision_failed=counts["vision_failed"],
     )
 
 

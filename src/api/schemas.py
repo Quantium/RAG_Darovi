@@ -56,6 +56,13 @@ class StatusResponse(BaseModel):
     converted: int
     embedded: int
     failed: int
+    # Files whose converter dropped VLM sentinels and are awaiting OCR by
+    # the vision_extract task (queue=vision). These are NOT yet usable.
+    vision_pending: int = 0
+    # Currently being transcribed by Llama-3.2-Vision in app-worker-vision.
+    vision_processing: int = 0
+    # Permanent VLM failure after retries + downscale + circuit breaker.
+    vision_failed: int = 0
 
 
 class FileStatusItem(BaseModel):
@@ -99,6 +106,10 @@ class DriveBootstrapResponse(BaseModel):
     embedded: int
     failed: int
     skipped: int
+    # VLM lifecycle: defaults to 0 so existing clients keep working.
+    vision_pending: int = 0
+    vision_processing: int = 0
+    vision_failed: int = 0
 
 
 class DriveFolderItem(BaseModel):

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Sequence
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Any, Sequence
 
-from sqlalchemy import DateTime, Integer, String, Text, delete, select, update
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +61,33 @@ class DriveConnection(Base):
     refresh_token_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
     selected_folder_id: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class ExtractedDocument(Base):
+    """Structured key-value pairs produced by the VLM extractor.
+
+    Hybrid schema: a handful of fixed columns enable cheap SQL filtering
+    on common business fields (issuer, date, amount), while `extras` and
+    `parties` use JSON for everything else. On Postgres the JSON columns
+    map to `jsonb`; on SQLite they fall back to a TEXT JSON column so
+    unit tests can keep using aiosqlite.
+    """
+
+    __tablename__ = "extracted_documents"
+
+    drive_file_id: Mapped[str] = mapped_column(
+        String, ForeignKey("file_records.drive_file_id", ondelete="CASCADE"), primary_key=True
+    )
+    document_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    issuer: Mapped[str | None] = mapped_column(String, nullable=True)
+    issued_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    parties: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    extras: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    extracted_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
 
 class MetadataRepository:
@@ -200,6 +228,41 @@ class MetadataRepository:
             row.updated_at = now
         await self._session.commit()
 
+    async def upsert_extracted_document(
+        self,
+        drive_file_id: str,
+        *,
+        document_type: str | None = None,
+        issuer: str | None = None,
+        issued_at: date | None = None,
+        total_amount: Decimal | None = None,
+        currency: str | None = None,
+        parties: list[str] | None = None,
+        extras: dict[str, Any] | None = None,
+    ) -> None:
+        values = dict(
+            drive_file_id=drive_file_id,
+            document_type=document_type,
+            issuer=issuer,
+            issued_at=issued_at,
+            total_amount=total_amount,
+            currency=currency,
+            parties=list(parties or []),
+            extras=dict(extras or {}),
+            extracted_at=datetime.now(timezone.utc),
+        )
+        stmt = _upsert_insert_for_session(self._session, ExtractedDocument).values(**values)
+        update_set = {k: stmt.excluded[k] for k in values if k != "drive_file_id"}
+        stmt = stmt.on_conflict_do_update(index_elements=["drive_file_id"], set_=update_set)
+        await self._session.execute(stmt)
+        await self._session.commit()
+
+    async def get_extracted_document(self, drive_file_id: str) -> ExtractedDocument | None:
+        result = await self._session.execute(
+            select(ExtractedDocument).where(ExtractedDocument.drive_file_id == drive_file_id)
+        )
+        return result.scalar_one_or_none()
+
 
 class SyncMetadataRepository:
     """Synchronous version of MetadataRepository for Celery tasks."""
@@ -321,6 +384,40 @@ class SyncMetadataRepository:
     def delete_all_file_records_sync(self) -> None:
         self._session.execute(delete(FileRecord))
         self._session.commit()
+
+    def upsert_extracted_document_sync(
+        self,
+        drive_file_id: str,
+        *,
+        document_type: str | None = None,
+        issuer: str | None = None,
+        issued_at: date | None = None,
+        total_amount: Decimal | None = None,
+        currency: str | None = None,
+        parties: list[str] | None = None,
+        extras: dict[str, Any] | None = None,
+    ) -> None:
+        values = dict(
+            drive_file_id=drive_file_id,
+            document_type=document_type,
+            issuer=issuer,
+            issued_at=issued_at,
+            total_amount=total_amount,
+            currency=currency,
+            parties=list(parties or []),
+            extras=dict(extras or {}),
+            extracted_at=datetime.now(timezone.utc),
+        )
+        stmt = _upsert_insert_for_session(self._session, ExtractedDocument).values(**values)
+        update_set = {k: stmt.excluded[k] for k in values if k != "drive_file_id"}
+        stmt = stmt.on_conflict_do_update(index_elements=["drive_file_id"], set_=update_set)
+        self._session.execute(stmt)
+        self._session.commit()
+
+    def get_extracted_document_sync(self, drive_file_id: str) -> ExtractedDocument | None:
+        return self._session.execute(
+            select(ExtractedDocument).where(ExtractedDocument.drive_file_id == drive_file_id)
+        ).scalar_one_or_none()
 
 
 async def init_db(database_url: str) -> None:

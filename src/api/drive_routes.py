@@ -46,7 +46,18 @@ DriveSetupAccess = Annotated[None, Depends(_verify_drive_setup_access)]
 
 
 def _status_counts(files: list) -> dict[str, int]:
-    counts = {"pending": 0, "downloaded": 0, "converted": 0, "embedded": 0, "failed": 0, "skipped": 0}
+    counts = {
+        "pending": 0,
+        "downloaded": 0,
+        "converted": 0,
+        "embedded": 0,
+        "failed": 0,
+        "skipped": 0,
+        # VLM stages — see vision_extract task for the lifecycle.
+        "vision_pending": 0,
+        "vision_processing": 0,
+        "vision_failed": 0,
+    }
     for f in files:
         if f.status in counts:
             counts[f.status] += 1
@@ -78,6 +89,9 @@ async def drive_bootstrap(request: Request) -> DriveBootstrapResponse:
         embedded=counts["embedded"],
         failed=counts["failed"],
         skipped=skipped,
+        vision_pending=counts["vision_pending"],
+        vision_processing=counts["vision_processing"],
+        vision_failed=counts["vision_failed"],
     )
 
     has_token = bool(conn and conn.refresh_token_enc)
@@ -90,7 +104,9 @@ async def drive_bootstrap(request: Request) -> DriveBootstrapResponse:
             connected=True,
             folder_selected=True,
             service_account_ready=False,
-            onboarding_phase="ready",
+            # Surface the real phase (e.g. "transcribing") in the UI but keep
+            # chat usable: previously embedded chunks are already searchable.
+            onboarding_phase=pipeline_phase,
             chat_ready=True,
             total_files=total,
             pending=counts["pending"],
@@ -99,11 +115,14 @@ async def drive_bootstrap(request: Request) -> DriveBootstrapResponse:
             embedded=counts["embedded"],
             failed=counts["failed"],
             skipped=skipped,
+            vision_pending=counts["vision_pending"],
+            vision_processing=counts["vision_processing"],
+            vision_failed=counts["vision_failed"],
         )
 
     if not oauth_configured:
-        onboarding_phase = "ready" if sa_ready else "disconnected"
-        chat_ready = sa_ready
+        onboarding_phase = pipeline_phase if sa_ready else "disconnected"
+        chat_ready = sa_ready and onboarding_phase == "ready"
         return DriveBootstrapResponse(
             ingest_source="drive",
             oauth_configured=False,
@@ -119,6 +138,9 @@ async def drive_bootstrap(request: Request) -> DriveBootstrapResponse:
             embedded=counts["embedded"],
             failed=counts["failed"],
             skipped=skipped,
+            vision_pending=counts["vision_pending"],
+            vision_processing=counts["vision_processing"],
+            vision_failed=counts["vision_failed"],
         )
 
     if not has_token:
@@ -149,6 +171,9 @@ async def drive_bootstrap(request: Request) -> DriveBootstrapResponse:
         embedded=counts["embedded"],
         failed=counts["failed"],
         skipped=skipped,
+        vision_pending=counts["vision_pending"],
+        vision_processing=counts["vision_processing"],
+        vision_failed=counts["vision_failed"],
     )
 
 

@@ -1,14 +1,22 @@
 import asyncio
+import json
 from uuid import uuid4
 
 import redis
 import structlog
 from celery import chain
 
+from src.converter.pdf_converter import PdfConverter
 from src.drive.drive_credentials import build_drive_service_for_sync_repo, effective_drive_folder_id
 from src.drive.downloader import DriveDownloader
 from src.drive.local_downloader import LocalFolderDownloader
-from src.worker.celery_app import app, RetryableTask
+from src.vision.circuit_breaker import CircuitBreaker
+from src.vision.client import OllamaVisionClient, VisionTimeoutError
+from src.vision.extractor import VisionExtractor
+from src.vision.image_utils import prepare_image
+from src.vision.rasterizer import is_image_mime, rasterize_page
+from src.vision.sentinels import VISION_SENTINEL_TEMPLATE, find_pages, has_sentinels
+from src.worker.celery_app import app, RetryableTask, VisionRetryableTask
 from src.worker.task_helpers import (
     build_metadata_repo,
     build_settings,
@@ -21,6 +29,7 @@ logger = structlog.get_logger()
 SYNC_LOCK_KEY = "rag:sync:lock"
 SYNC_LOCK_TTL = 1800  # 30 minutes
 MILVUS_INSERT_BATCH_SIZE = 1000
+VISION_DLQ_KEY = "vision:dlq"
 
 
 @app.task(bind=True, max_retries=1)
@@ -60,7 +69,9 @@ def run_incremental_sync(self):
             dispatch_file_pipeline(file_meta, trace_id=trace_id)
 
         for drive_file_id in deleted_ids:
-            delete_file_vectors.delay(drive_file_id, headers={"trace_id": trace_id})
+            # `headers` belongs to apply_async(), not the task signature. Celery
+            # 5.6 validates kwargs against the function and would reject .delay().
+            delete_file_vectors.apply_async(args=[drive_file_id], headers={"trace_id": trace_id})
 
         task_logger.info("sync.dispatched", changed=len(changed_files), deleted=len(deleted_ids))
     finally:
@@ -148,12 +159,19 @@ def convert_file(self, download_result: dict) -> dict:
         text_key = f"{drive_file_id}.txt"
         storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
         repo.update_text_key_sync(drive_file_id, text_key)
-        repo.update_status_sync(drive_file_id, "converted")
+        # If the converter left VLM sentinels, the file is NOT done yet — it
+        # still needs the vision_extract task to transcribe scanned pages.
+        # Use a distinct status so /status shows the real backlog instead of
+        # claiming the file is "converted" while VISION_NEEDED tokens remain.
+        next_status = "vision_pending" if has_sentinels(text) else "converted"
+        repo.update_status_sync(drive_file_id, next_status)
 
         task_logger.info("task.completed", text_key=text_key)
         return {
             "drive_file_id": drive_file_id,
             "minio_text_key": text_key,
+            "minio_raw_key": download_result["minio_raw_key"],
+            "mime_type": download_result["mime_type"],
             "name": download_result["name"],
             "document_type": derive_document_type(download_result["mime_type"]),
         }
@@ -201,12 +219,38 @@ def embed_file(self, convert_result: dict) -> dict:
             asyncio.run(_update_embedded(settings, drive_file_id, chunk_count=0))
             return {"drive_file_id": drive_file_id, "chunk_count": 0}
 
+        kv_summary = convert_result.get("kv_summary") or {}
+        if kv_summary:
+            chunks = _prepend_kv_summary_to_first_chunk(chunks, kv_summary)
+
         chunk_count = asyncio.run(_embed_and_store(settings, drive_file_id, chunks))
         task_logger.info("task.completed", chunk_count=chunk_count)
         return {"drive_file_id": drive_file_id, "chunk_count": chunk_count}
     except Exception as exc:
         task_logger.error("task.failed", error=str(exc))
         raise
+
+
+def _prepend_kv_summary_to_first_chunk(chunks: list, kv_summary: dict) -> list:
+    """Inject a one-liner KV summary at the top of the first chunk.
+
+    Improves semantic recall: queries that mention the issuer or amount
+    will now match the chunk that also carries the surrounding context.
+    Only fields that carry a non-null value are emitted to keep the
+    summary line short and informative.
+    """
+    pairs = []
+    for key in ("document_type", "issuer", "issued_at", "total_amount", "currency"):
+        value = kv_summary.get(key)
+        if value:
+            pairs.append(f"{key}={value}")
+    if not pairs:
+        return chunks
+
+    summary = "[document_summary] " + ", ".join(pairs) + "\n\n"
+    first = chunks[0]
+    first.text = summary + first.text
+    return chunks
 
 
 async def _embed_and_store(settings, drive_file_id: str, chunks: list) -> int:
@@ -254,6 +298,257 @@ async def _update_embedded(settings, drive_file_id: str, chunk_count: int) -> No
         await repo.update_last_processed_at(drive_file_id)
         await session.commit()
     await engine.dispose()
+
+
+@app.task(base=VisionRetryableTask, bind=True)
+def vision_extract(self, convert_result: dict) -> dict:
+    """Resolve VLM sentinels emitted by the converter step.
+
+    No-op for born-digital documents. For pages flagged with the sentinel
+    `\\u0000VISION_NEEDED:N\\u0000`, this task:
+
+    1. Downloads the raw file and rasterizes the requested page.
+    2. Calls VisionExtractor (Llama-3.2-Vision via Ollama) for OCR + KV.
+    3. Substitutes the sentinel with the transcribed text.
+    4. Re-uploads the patched text to MinIO and persists structured KV
+       in Postgres (`extracted_documents` table).
+
+    Failure handling (in order of preference):
+      a) On VisionTimeoutError: retry once with a downscaled rasterization.
+      b) Increment the Redis-backed circuit breaker on persistent errors.
+         When the breaker opens, subsequent pages take the Tesseract
+         fallback (when `vision_fallback_to_tesseract` is true), so the
+         document still flows through embed_file with partial coverage.
+      c) Pages that exhaust every strategy are replaced with a placeholder
+         and pushed to the `vision:dlq` Redis list for human inspection.
+    """
+    headers: dict[str, str] = {}
+    if hasattr(self, "request") and self.request:
+        headers = self.request.get("headers") or {}
+    trace_id = headers.get("trace_id", str(uuid4()))
+    drive_file_id = convert_result.get("drive_file_id", "unknown")
+    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="vision_extract")
+    task_logger.info("task.started")
+
+    if convert_result.get("skipped"):
+        task_logger.info("task.skipped", reason="previous task skipped")
+        return convert_result
+
+    settings = build_settings()
+    storage = build_storage(settings)
+    repo, cleanup = build_metadata_repo(settings)
+
+    try:
+        text_key = convert_result["minio_text_key"]
+        text = storage.download(settings.minio_bucket_text, text_key).decode("utf-8")
+
+        if not has_sentinels(text):
+            task_logger.info("task.noop", reason="no_sentinels")
+            return convert_result
+
+        pages = find_pages(text)
+        task_logger.info("task.pages_to_process", pages=pages)
+        # Surfaces "in progress" in /status while the slow VLM pass runs.
+        repo.update_status_sync(drive_file_id, "vision_processing")
+
+        raw_bytes = storage.download(settings.minio_bucket_raw, convert_result["minio_raw_key"])
+        mime_type = convert_result["mime_type"]
+
+        redis_client = redis.Redis.from_url(settings.redis_cache_url)
+        breaker = CircuitBreaker(
+            redis_client,
+            threshold=settings.vision_circuit_breaker_threshold,
+            reset_after_s=settings.vision_circuit_breaker_reset_s,
+        )
+        client = OllamaVisionClient(settings)
+        extractor = VisionExtractor(client=client, settings=settings)
+        tesseract_fallback = PdfConverter(settings) if settings.vision_fallback_to_tesseract else None
+
+        aggregated_kv: dict[str, object] = {
+            "document_type": None,
+            "issuer": None,
+            "issued_at": None,
+            "total_amount": None,
+            "currency": None,
+            "parties": [],
+            "extras": {},
+        }
+
+        for page_num in pages:
+            sentinel = VISION_SENTINEL_TEMPLATE.format(page=page_num)
+            replacement, page_kv = _resolve_sentinel(
+                page_num=page_num,
+                raw_bytes=raw_bytes,
+                mime_type=mime_type,
+                drive_file_id=drive_file_id,
+                settings=settings,
+                breaker=breaker,
+                extractor=extractor,
+                tesseract_fallback=tesseract_fallback,
+                redis_client=redis_client,
+                logger_=task_logger,
+            )
+            text = text.replace(sentinel, replacement, 1)
+            if page_kv is not None:
+                _merge_kv(aggregated_kv, page_kv)
+
+        storage.upload(settings.minio_bucket_text, text_key, text.encode("utf-8"))
+
+        repo.upsert_extracted_document_sync(
+            drive_file_id,
+            document_type=aggregated_kv.get("document_type"),
+            issuer=aggregated_kv.get("issuer"),
+            issued_at=aggregated_kv.get("issued_at"),
+            total_amount=aggregated_kv.get("total_amount"),
+            currency=aggregated_kv.get("currency"),
+            parties=list(aggregated_kv.get("parties") or []),
+            extras=dict(aggregated_kv.get("extras") or {}),
+        )
+        # VLM pass complete: text in MinIO has no sentinels left, so the file
+        # is now equivalent to a regular "converted" doc and is safe for embed.
+        repo.update_status_sync(drive_file_id, "converted")
+
+        result = dict(convert_result)
+        result["kv_summary"] = {
+            "document_type": aggregated_kv.get("document_type"),
+            "issuer": aggregated_kv.get("issuer"),
+            "issued_at": (
+                aggregated_kv["issued_at"].isoformat() if aggregated_kv.get("issued_at") else None
+            ),
+            "total_amount": (
+                str(aggregated_kv["total_amount"]) if aggregated_kv.get("total_amount") else None
+            ),
+            "currency": aggregated_kv.get("currency"),
+        }
+        task_logger.info("task.completed", pages_processed=len(pages))
+        return result
+    except Exception as exc:
+        task_logger.error("task.failed", error=str(exc))
+        raise
+    finally:
+        cleanup()
+
+
+def _resolve_sentinel(
+    *,
+    page_num: int,
+    raw_bytes: bytes,
+    mime_type: str,
+    drive_file_id: str,
+    settings,
+    breaker,
+    extractor,
+    tesseract_fallback,
+    redis_client,
+    logger_,
+) -> tuple[str, dict | None]:
+    """Run the VLM (or fallback) for a single page. Returns (text, kv_dict|None)."""
+    if not breaker.allow():
+        logger_.warning("vision.cb.open_skipping", page=page_num)
+        return _tesseract_fallback_text(
+            tesseract_fallback, raw_bytes, mime_type, page_num, drive_file_id, redis_client, logger_
+        ), None
+
+    primary_dpi = settings.ocr_dpi
+    downscale_dpi = settings.vision_downscale_dpi
+
+    try:
+        image_bytes = rasterize_page(raw_bytes, mime_type, page_num, dpi=primary_dpi)
+        result = asyncio.run(extractor.extract(image_bytes))
+        breaker.record_success()
+        return result.text, _kv_to_dict(result.kv)
+    except VisionTimeoutError as exc:
+        logger_.warning("vision.timeout.retrying_with_downscale", page=page_num, error=str(exc))
+        try:
+            image_bytes = rasterize_page(raw_bytes, mime_type, page_num, dpi=downscale_dpi)
+            # Tighter image budget on retry to mitigate OOM.
+            tight = prepare_image(image_bytes, max_mb=max(1, settings.vision_max_image_mb // 2))
+            result = asyncio.run(extractor.extract(tight))
+            breaker.record_success()
+            return result.text, _kv_to_dict(result.kv)
+        except Exception as inner_exc:
+            logger_.error("vision.downscale_retry_failed", page=page_num, error=str(inner_exc))
+            breaker.record_failure()
+            _push_to_dlq(redis_client, drive_file_id, page_num, f"timeout+downscale: {inner_exc}", logger_)
+            return _tesseract_fallback_text(
+                tesseract_fallback, raw_bytes, mime_type, page_num, drive_file_id, redis_client, logger_
+            ), None
+    except Exception as exc:
+        logger_.error("vision.page_failed", page=page_num, error=str(exc))
+        breaker.record_failure()
+        _push_to_dlq(redis_client, drive_file_id, page_num, str(exc), logger_)
+        return _tesseract_fallback_text(
+            tesseract_fallback, raw_bytes, mime_type, page_num, drive_file_id, redis_client, logger_
+        ), None
+
+
+def _tesseract_fallback_text(
+    tesseract_fallback,
+    raw_bytes,
+    mime_type,
+    page_num,
+    drive_file_id,
+    redis_client,
+    logger_,
+) -> str:
+    if tesseract_fallback is None:
+        logger_.warning("vision.fallback_disabled", page=page_num)
+        return f"[OCR FAILED page {page_num}]"
+
+    try:
+        if is_image_mime(mime_type):
+            import io as _io
+
+            from PIL import Image
+            import pytesseract
+
+            with Image.open(_io.BytesIO(raw_bytes)) as img:
+                ocr_text = pytesseract.image_to_string(img)
+        else:
+            ocr_text = tesseract_fallback._ocr_page_tesseract(raw_bytes, page_num)
+        if ocr_text and ocr_text.strip():
+            return ocr_text
+    except Exception as exc:
+        logger_.error("vision.tesseract_fallback_failed", page=page_num, error=str(exc))
+        _push_to_dlq(redis_client, drive_file_id, page_num, f"tesseract: {exc}", logger_)
+
+    return f"[OCR FAILED page {page_num}]"
+
+
+def _push_to_dlq(redis_client, drive_file_id: str, page: int, error: str, logger_) -> None:
+    payload = json.dumps({"drive_file_id": drive_file_id, "page": page, "error": error})
+    try:
+        redis_client.lpush(VISION_DLQ_KEY, payload)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger_.error("vision.dlq_push_failed", error=str(exc))
+
+
+def _kv_to_dict(kv) -> dict:
+    return {
+        "document_type": kv.document_type,
+        "issuer": kv.issuer,
+        "issued_at": kv.issued_at,
+        "total_amount": kv.total_amount,
+        "currency": kv.currency,
+        "parties": list(kv.parties),
+        "extras": dict(kv.extras),
+    }
+
+
+def _merge_kv(aggregated: dict, page_kv: dict) -> None:
+    """First non-empty value wins for fixed fields; lists/dicts are merged."""
+    for key in ("document_type", "issuer", "issued_at", "total_amount", "currency"):
+        if not aggregated.get(key) and page_kv.get(key):
+            aggregated[key] = page_kv[key]
+
+    parties = aggregated.setdefault("parties", [])
+    for p in page_kv.get("parties", []):
+        if p and p not in parties:
+            parties.append(p)
+
+    extras = aggregated.setdefault("extras", {})
+    for k, v in page_kv.get("extras", {}).items():
+        extras.setdefault(k, v)
 
 
 @app.task(base=RetryableTask, bind=True)
@@ -350,7 +645,8 @@ def restart_ingest(self) -> dict:
         repo.delete_all_file_records_sync()
         asyncio.run(repo.update_page_token(""))
 
-        run_incremental_sync.delay(headers={"trace_id": trace_id})
+        # See note above: pass `headers` via apply_async, not as a task kwarg.
+        run_incremental_sync.apply_async(headers={"trace_id": trace_id})
         task_logger.info(
             "task.completed",
             vectors_removed=vectors_removed,
@@ -430,13 +726,19 @@ def run_sql_generation(self, job_id: str, description: str, target_db: str) -> d
 
 
 def dispatch_file_pipeline(file_meta: dict, trace_id: str | None = None) -> None:
-    """Build and dispatch the download → convert → embed chain for one file."""
+    """Build and dispatch the download → convert → vision_extract → embed chain.
+
+    `vision_extract` is a no-op for documents whose converters did not
+    emit any VLM sentinels (born-digital PDFs, sheets, plain text, etc.),
+    so the chain is safe to apply unconditionally.
+    """
     if trace_id is None:
         trace_id = str(uuid4())
 
     pipeline = chain(
         download_file.s(file_meta),
         convert_file.s(),
+        vision_extract.s(),
         embed_file.s(),
     )
     pipeline.apply_async(headers={"trace_id": trace_id})

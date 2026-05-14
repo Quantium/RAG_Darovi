@@ -13,10 +13,13 @@ gspread>=6.1,<7
 # OAuth token encryption
 cryptography>=42.0,<44
 
-# PDF + OCR
+# PDF + OCR (Tesseract retained as fallback for the VLM circuit breaker)
 pdfplumber>=0.11,<1
 pytesseract>=0.3.10,<1
 pdf2image>=1.17,<2
+# Vision pipeline (image preparation; pdf2image already pulls Pillow but we
+# pin it explicitly because the worker manipulates raw images directly).
+Pillow>=10.0,<13
 
 # Additional file formats
 python-docx>=1.1,<2
