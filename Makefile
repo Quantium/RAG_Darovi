@@ -1,10 +1,11 @@
-.PHONY: up down test lint format install clean typecheck docker-build docker-qa tls-certs e2e
-
-install:
-	pip install -r requirements-dev.txt
+.PHONY: up down clean docker-build docker-qa tls-certs submodules qa-legacy qa-services qa-cross qa-all
 
 up:
 	docker compose up -d
+
+submodules:
+	git submodule sync --recursive
+	git submodule update --init --recursive
 
 docker-build:
 	docker compose build
@@ -19,20 +20,19 @@ tls-certs:
 down:
 	docker compose down
 
-test:
-	pytest -v --tb=short
+qa-legacy:
+	cd legacy/rag-legacy-core && make install && make test
 
-e2e:
-	cd e2e && npm ci && npx playwright install chromium && npm run test:e2e
+qa-services:
+	cd services/ingest_raw && make install && make test
+	cd services/extract_text && make install && make test
+	cd services/retrieval_admin && make install && make test
+	cd services/chatbot_response && make install && make test
 
-lint:
-	ruff check src/ tests/
+qa-cross:
+	cd qa/rag-e2e-contracts && make install && make test
 
-format:
-	ruff format src/ tests/
-
-typecheck:
-	mypy --strict src/
+qa-all: qa-legacy qa-services qa-cross
 
 clean:
 	docker compose down -v

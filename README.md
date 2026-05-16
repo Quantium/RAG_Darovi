@@ -1,273 +1,142 @@
-# RAG Darovi
+# RAG Darovi (Orchestrator)
 
-A RAG (retrieval-augmented generation) pipeline: ingest documents from Google Drive or a local folder, convert and chunk text, embed with Ollama, store vectors in Milvus, and serve a FastAPI backend with a vanilla JS chat UI (REST + WebSocket), Celery workers, and PostgreSQL metadata. Optional API key auth and SQL automation features are included.
+This repository is the **local orchestrator** for the RAG Darovi platform. It does not host service code directly: every runtime lives in a dedicated repository and is mounted here through git submodules. The orchestrator owns Docker Compose, environment templates, integration scripts, and the verification gates that exercise the whole multi-repo system end to end.
 
-For architecture depth, phased build plans, and agent-oriented rules, see [AGENTS.md](AGENTS.md) and [PLAN.md](PLAN.md). The master index is [plans/PLAN_00_INDEX.md](plans/PLAN_00_INDEX.md).
+For the second cleanup history and rationale, see [docs/repo-split/REPO_SPLIT_MAP.md](docs/repo-split/REPO_SPLIT_MAP.md) and [docs/repo-split/VERIFICATION_GATES.md](docs/repo-split/VERIFICATION_GATES.md).
 
-## Table of contents
+## Repositories at a glance
 
-- [Prerequisites](#prerequisites)
-- [Configuration](#configuration)
-- [Local Python environment](#local-python-environment)
-- [Run with Docker Compose](#run-with-docker-compose)
-- [HTTPS (optional)](#https-optional)
-- [Quality checks in Docker](#quality-checks-in-docker)
-- [Makefile reference](#makefile-reference)
-- [FAQ](#faq)
+- `services/ingest_raw` -> [Quantium/rag-service-ingest-raw](https://github.com/Quantium/rag-service-ingest-raw)
+- `services/extract_text` -> [Quantium/rag-service-extract-text](https://github.com/Quantium/rag-service-extract-text)
+- `services/retrieval_admin` -> [Quantium/rag-service-retrieval-admin](https://github.com/Quantium/rag-service-retrieval-admin)
+- `services/chatbot_response` -> [Quantium/rag-service-chatbot-response](https://github.com/Quantium/rag-service-chatbot-response)
+- `legacy/rag-legacy-core` -> [Quantium/rag-legacy-core](https://github.com/Quantium/rag-legacy-core)
+- `schema/rag-schema` -> [Quantium/rag-schema](https://github.com/Quantium/rag-schema)
+- `qa/rag-e2e-contracts` -> [Quantium/rag-e2e-contracts](https://github.com/Quantium/rag-e2e-contracts)
+
+The legacy monolith image (`app-api`, `app-worker`, `app-worker-vision`, `app-beat`, `app-qa`) is built from the `legacy/rag-legacy-core` submodule.
 
 ## Prerequisites
 
-- **Docker Engine** and **Docker Compose v2** (`docker compose`, not the legacy `docker-compose` binary).
-- **Git**.
-- Roughly **~10 GB** free disk for images, volumes, and Ollama models (see [plans/PLAN_00_INDEX.md](plans/PLAN_00_INDEX.md)).
-- **Python 3.11+** only if you run tests, linters, or the CLI on the host (not required to only use containers).
-- **OpenSSL** if you generate TLS certificates with the provided script.
+- Docker Engine and Docker Compose v2 (`docker compose`).
+- Git (with submodule support).
+- Roughly 10 GB free disk for images, volumes and Ollama models.
+- OpenSSL if you generate local TLS certificates.
+- Python 3.11+ only if you want to run service test gates locally; each repo bootstraps its own venv.
 
-## Configuration
-
-### Clone and `.env`
+## First-time setup
 
 ```bash
-git clone <repository-url>
+git clone git@github.com:Quantium/RAG_Darovi.git
 cd RAG_Darovi
+git submodule update --init --recursive
 cp .env.example .env
 ```
 
-Edit `.env` as needed. The file is **gitignored**; never commit secrets.
-
-### How settings are loaded
-
-All application configuration goes through Pydantic **`Settings`** in [config/settings.py](config/settings.py):
-
-- **Override order**: environment variables **>** `.env` file **>** code defaults.
-- The model reads `.env` from the project root (`model_config` in `Settings`).
-
-Compose services **`app-api`**, **`app-worker`**, and **`app-beat`** use `env_file: .env` plus an **`x-app-env`** block in [docker-compose.yml](docker-compose.yml) that sets **in-cluster hostnames** (`redis`, `postgres`, `milvus`, `minio`, `ollama`) so containers do not rely on `localhost` for other services. Your `.env` may still say `localhost` for **host-only** workflows; inside Compose, those URLs are overridden for the variables listed under `x-app-env`.
-
-### Ingestion source
-
-Choose the ingestion source with [`.env.example`](.env.example):
-
-- `INGEST_SOURCE=drive` (default): use Google Drive credentials and folder selection.
-- `INGEST_SOURCE=local`: read files recursively from `LOCAL_SOURCE_FOLDER`.
-
-When using local mode, set `LOCAL_SOURCE_FOLDER` to an existing folder path visible to the process/container running the worker.
-
-### Google Drive (optional)
-
-For Drive sync, you need a Google **service account** JSON with Drive API access, placed under `credentials/` (see [`.env.example`](.env.example): `GOOGLE_APPLICATION_CREDENTIALS`, `DRIVE_FOLDER_ID`). The Docker image **does not** copy `credentials/` from the build context ([`.dockerignore`](.dockerignore)); for containers you must mount the directory or otherwise provide the file at the path referenced by `GOOGLE_APPLICATION_CREDENTIALS`.
-
-### API key (optional)
-
-If `API_KEY` is set in `.env`, clients must send header `X-API-Key`. Empty `API_KEY` disables auth (dev mode).
-
-### LLM provider selection
-
-The chat model is selected through `.env`:
-
-- Local Ollama: `LLM_PROVIDER=ollama` with `LLM_BASE_URL` pointing to your Ollama OpenAI-compatible endpoint.
-- DeepSeek API: `LLM_PROVIDER=deepseek`, set `DEEPSEEK_API_KEY`, and choose `LLM_MODEL` (for example `deepseek-chat`).
-
-`DEEPSEEK_BASE_URL` defaults to `https://api.deepseek.com/v1/` and can be overridden if needed.
-
-### OCR extraction tuning
-
-PDF conversion uses `pdfplumber` first and conditionally falls back to OCR with Tesseract. You can tune OCR behavior with `.env`:
-
-- `OCR_LANGUAGE` (default `eng`): language passed to Tesseract (`eng`, `spa`, `spa+eng`, etc.).
-- `OCR_DPI` (default `300`): rasterization DPI for `pdf2image`.
-- `OCR_PSM` (default empty): optional Tesseract page segmentation mode.
-- `OCR_MIN_TEXT_CHARS` (default `40`): minimum non-whitespace chars to trust text-layer extraction.
-- `OCR_MIN_ALPHA_RATIO` (default `0.45`): minimum alphabetic ratio to trust extracted text.
-- `OCR_MAX_SINGLE_CHAR_LINE_RATIO` (default `0.6`): upper bound for single-char line ratio before considering text low-quality.
-
-When a page is classified as low quality, the converter attempts OCR and logs the fallback reason in structured logs.
-
-## Local Python environment
-
-Use a virtual environment so dependencies stay isolated (aligned with [AGENTS.md](AGENTS.md)):
-
-```bash
-python3.11 -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-# .venv\Scripts\activate    # Windows
-```
-
-Install dev dependencies (includes test and lint tools):
-
-```bash
-make install
-# same as: pip install -r requirements-dev.txt
-```
-
-Production-only deps are listed in [requirements.txt](requirements.txt); dev/test extends them via [requirements-dev.txt](requirements-dev.txt). Tooling versions and pytest markers live in [pyproject.toml](pyproject.toml).
-
-### Local quality commands
-
-These match the project’s definition of done ([AGENTS.md](AGENTS.md)):
-
-| Command | Purpose |
-|--------|---------|
-| `make test` | `pytest` with project defaults |
-| `make lint` | `ruff check` on `src/` and `tests/` |
-| `make format` | `ruff format` |
-| `make typecheck` | `mypy --strict src/` |
-
-### CLI entrypoint
-
-The CLI is [src/main.py](src/main.py): `serve`, `worker`, `beat`, `ingest`, `query` (see [AGENTS.md](AGENTS.md) for overview).
+Edit `.env`. The file is gitignored.
 
 ## Run with Docker Compose
 
-Build and start the stack:
-
 ```bash
 docker compose up -d --build
-# or: make up   # without --build; build first with make docker-build if needed
+# or: make up
 ```
 
-### Services (from [docker-compose.yml](docker-compose.yml))
-
-| Service | Role |
-|---------|------|
-| `redis` | Celery broker, results, cache (logical DBs 0/1/2 via URLs) |
-| `postgres` | Metadata and related SQL |
-| `milvus-etcd` | Milvus dependency |
-| `minio` | Object storage for raw/converted files |
-| `milvus` | Vector store |
-| `ollama` | Embeddings + LLM |
-| `app-api` | FastAPI + static UI ([Dockerfile](Dockerfile)), default command [docker-entrypoint-api.sh](docker-entrypoint-api.sh) |
-| `app-worker` | Celery worker |
-| `app-beat` | Celery Beat scheduler |
-| `app-qa` | **Profile `qa` only** — QA image ([Dockerfile.dev](Dockerfile.dev)), not started by default |
-
-### Published ports (host)
+Published host ports:
 
 | Port | Service |
 |------|---------|
-| **8000** | HTTP(S) API + static chat UI (`app-api`) |
+| 8000 | Legacy API + chat UI (`app-api`) |
+| 8010 | Retrieval/admin API (`retrieval-admin-service`) |
+| 8020 | Chatbot response API (`chatbot-response-service`) |
 | 5432 | PostgreSQL |
 | 6379 | Redis |
 | 9000, 9001 | MinIO API and console |
 | 19530 | Milvus |
-| **11435** | Ollama UI/API on the host (**container** listens on 11434; host **11435** avoids clashing with a local Ollama on **11434**) |
+| 11435 | Ollama |
+| 11436 | Ollama Vision |
 
-### Smoke checks
+Smoke check:
 
 ```bash
 docker compose ps
 curl -fsS http://localhost:8000/status
+curl -fsS http://localhost:8010/health
+curl -fsS http://localhost:8020/health
+./scripts/verify-multi-repo-local.sh
 ```
 
-Open **http://localhost:8000** in a browser for the chat UI. WebSocket endpoint: **`/ws/chat`** (see [static/app.js](static/app.js)); REST **`GET /status`** is defined in [src/api/routes.py](src/api/routes.py).
+## Verification gates
 
-### Logs
+| Target | What it does |
+|--------|--------------|
+| `make qa-legacy` | Run the legacy core unit suite from its submodule |
+| `make qa-services` | Run the test suite of every service submodule |
+| `make qa-cross` | Run cross-service contracts (`qa/rag-e2e-contracts`) |
+| `make qa-all` | All of the above in order |
 
-```bash
-docker compose logs -f app-api
-docker compose logs -f app-worker
-```
-
-### Healthcheck
-
-`app-api` uses [docker-healthcheck-api.sh](docker-healthcheck-api.sh): HTTP or HTTPS to `127.0.0.1`:`API_PORT` **`/status`**, depending on TLS (see next section).
-
-## HTTPS (optional)
-
-For **local or LAN HTTPS** (e.g. to get a secure context for Web Crypto and `wss:`):
-
-1. Generate a self-signed cert (OpenSSL):
-
-   ```bash
-   make tls-certs
-   # or: ./scripts/generate-local-certs.sh ./certs
-   ```
-
-   Optional: **`TLS_SAN_HOSTS`** — comma-separated DNS names and IPs (defaults include `localhost`, `envidia`, `127.0.0.1` per [scripts/generate-local-certs.sh](scripts/generate-local-certs.sh)).
-
-2. In `.env`, set (paths **inside** the `app-api` container match the compose volume):
-
-   ```env
-   API_SSL_CERTFILE=/etc/rag/certs/cert.pem
-   API_SSL_KEYFILE=/etc/rag/certs/key.pem
-   ```
-
-   [docker-compose.yml](docker-compose.yml) mounts **`./certs:/etc/rag/certs:ro`** on `app-api`. [`.env.example`](.env.example) documents the same.
-
-3. Restart `app-api`. The entrypoint enables uvicorn TLS when both files exist ([docker-entrypoint-api.sh](docker-entrypoint-api.sh)).
-
-Browsers will warn on self-signed certs unless you trust them (e.g. import `cert.pem` or use [mkcert](https://github.com/FiloSottile/mkcert)).
-
-## Quality checks in Docker
-
-Run **ruff**, **mypy**, and **unit tests** (excludes integration) in a dedicated image without starting the full stack:
-
-```bash
-make docker-qa
-```
-
-Equivalent:
-
-```bash
-docker compose --profile qa build app-qa
-docker compose --profile qa run --rm app-qa
-```
-
-[scripts/docker-qa.sh](scripts/docker-qa.sh) runs:
-
-- `ruff check` / `ruff format --check` on `src/` and `tests/`
-- `mypy --strict src/`
-- `pytest -m "not integration"`
-
-Tests marked **`integration`** in [pyproject.toml](pyproject.toml) expect real services (Milvus, MinIO, Ollama, etc.); run them separately when the stack is up if needed.
+Each submodule provides its own Makefile. The orchestrator targets bootstrap a venv inside the submodule path and run the corresponding `pytest` suite.
 
 ## Makefile reference
 
 | Target | Description |
 |--------|-------------|
-| `make install` | `pip install -r requirements-dev.txt` |
 | `make up` | `docker compose up -d` |
 | `make down` | `docker compose down` |
+| `make submodules` | Sync and initialize all submodules |
 | `make docker-build` | `docker compose build` |
 | `make docker-qa` | Build and run `app-qa` (profile `qa`) |
-| `make tls-certs` | `./scripts/generate-local-certs.sh ./certs` |
-| `make test` | `pytest` |
-| `make lint` | `ruff check` |
-| `make format` | `ruff format` |
-| `make typecheck` | `mypy --strict src/` |
+| `make tls-certs` | Generate local TLS certificates under `./certs` |
+| `make qa-legacy` | Run legacy core test gate |
+| `make qa-services` | Run all service submodule test gates |
+| `make qa-cross` | Run cross-service contract tests |
+| `make qa-all` | Run legacy + services + cross gates |
 | `make clean` | `docker compose down -v` and remove `__pycache__` |
+
+## Rollback
+
+A stable baseline tag (`v0.8.0`) was created before the multi-repo split. To return to it locally:
+
+```bash
+git fetch --tags
+git checkout v0.8.0
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+See [docs/repo-split/VERIFICATION_GATES.md](docs/repo-split/VERIFICATION_GATES.md) for full rollback guidance.
+
+## HTTPS (optional)
+
+Generate a self-signed cert for local HTTPS:
+
+```bash
+make tls-certs
+```
+
+Set in `.env`:
+
+```env
+API_SSL_CERTFILE=/etc/rag/certs/cert.pem
+API_SSL_KEYFILE=/etc/rag/certs/key.pem
+```
+
+The `app-api` container mounts `./certs:/etc/rag/certs:ro`. The legacy entrypoint enables uvicorn TLS automatically when both files exist.
 
 ## FAQ
 
 ### `permission denied` when talking to Docker
 
-The Docker socket is often restricted to the **`docker`** group. Add your user: `sudo usermod -aG docker "$USER"` and **log out and back in**, or use `sudo docker compose ...` temporarily.
+Add your user to the `docker` group: `sudo usermod -aG docker "$USER"` and re-login, or prefix commands with `sudo`.
 
 ### Port 11434 already in use on the host
 
-Compose maps the Ollama container to host port **11435** so a locally installed Ollama can keep **11434**. Pull models via the container, e.g. `docker compose exec ollama ollama pull nomic-embed-text` and `ollama pull llama3` (adjust service name if your project name differs).
-
-### `crypto.randomUUID is not a function` in the browser
-
-`crypto.randomUUID()` requires a **secure context** (HTTPS or `http://localhost`). On plain HTTP to another hostname, use **HTTPS** (see [HTTPS (optional)](#https-optional)) or rely on the **`randomUUID()` fallback** in [static/app.js](static/app.js).
-
-### WebSocket fails
-
-The UI builds **`ws:` / `wss:`** from `location` ([static/app.js](static/app.js)). Use the same host and port as the API; with HTTPS, the page should load over **HTTPS** so the socket uses **wss:**.
-
-### `app-api` unhealthy
-
-Check `docker compose logs app-api`, verify dependencies reached **healthy**, and that **`/status`** responds. With TLS, the healthcheck uses HTTPS with `-k` ([docker-healthcheck-api.sh](docker-healthcheck-api.sh)).
+Compose maps the Ollama container to host port `11435` so a local Ollama install can keep `11434`. Pull models via the container, for example `docker compose exec ollama ollama pull nomic-embed-text`.
 
 ### Drive sync does nothing
 
-Confirm **service account JSON** path, **`DRIVE_FOLDER_ID`**, and API enablement. Mount `credentials/` into the container if you run sync inside Docker.
+Confirm the service account JSON, `DRIVE_FOLDER_ID`, and Drive API enablement. Mount `credentials/` into the relevant container.
 
-### Local sync does nothing
+### Where does service code live?
 
-Set `INGEST_SOURCE=local` and verify `LOCAL_SOURCE_FOLDER` points to a real directory accessible by the worker process/container.
-
-### Where are production vs dev dependencies?
-
-- **Runtime image** ([Dockerfile](Dockerfile)): [requirements.txt](requirements.txt) only.
-- **QA image** ([Dockerfile.dev](Dockerfile.dev)): [requirements-dev.txt](requirements-dev.txt).
+Inside each submodule. Browse, for example, [services/retrieval_admin/README.md](services/retrieval_admin/README.md), [legacy/rag-legacy-core/README.md](legacy/rag-legacy-core/README.md), or open the corresponding GitHub repo from the table above.

@@ -147,7 +147,7 @@ services:
       start_period: 14400s  # 4h to allow first-time Llama-3.2-Vision pull
 
   app-api:
-    build: .
+    build: ./legacy/rag-legacy-core
     ports:
       - "8000:8000"
     env_file: .env
@@ -171,11 +171,9 @@ services:
       retries: 5
 
   app-worker:
-    # Handles the lightweight stages (download / convert / embed). The
-    # convert stage now leaves a sentinel for low-quality pages instead of
-    # blocking on Tesseract, so this worker can stay at concurrency=4.
-    build: .
-    command: celery -A src.worker.celery_app worker --loglevel=info --concurrency=4 -Q celery,download,convert,embed
+    # Handles downstream orchestration (poll -> vision -> embed).
+    build: ./legacy/rag-legacy-core
+    command: celery -A src.worker.celery_app worker --loglevel=info --concurrency=4 -Q celery,default,embed
     env_file: .env
     environment:
       <<: *app-env
@@ -191,11 +189,89 @@ services:
       ollama:
         condition: service_healthy
 
+  ingest-raw-service:
+    build:
+      context: ./services/ingest_raw
+    env_file: .env
+    environment:
+      DATABASE_URL_SYNC: postgresql+psycopg2://postgres:postgres@postgres:5432/rag_darovi
+      MINIO_ENDPOINT: minio:9000
+      INGEST_RAW_CRON: ${INGEST_RAW_CRON:-0 * * * *}
+      INGEST_RAW_BATCH_SIZE: ${INGEST_RAW_BATCH_SIZE:-200}
+      INGEST_RAW_RUN_ON_START: ${INGEST_RAW_RUN_ON_START:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  extract-text-service:
+    build:
+      context: ./services/extract_text
+    env_file: .env
+    environment:
+      DATABASE_URL_SYNC: postgresql+psycopg2://postgres:postgres@postgres:5432/rag_darovi
+      MINIO_ENDPOINT: minio:9000
+      EXTRACT_TEXT_CRON: ${EXTRACT_TEXT_CRON:-0 */4 * * *}
+      EXTRACT_TEXT_BATCH_SIZE: ${EXTRACT_TEXT_BATCH_SIZE:-200}
+      EXTRACT_TEXT_RUN_ON_START: ${EXTRACT_TEXT_RUN_ON_START:-true}
+      EXTRACT_TEXT_LOCK_ID: ${EXTRACT_TEXT_LOCK_ID:-8245101}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  retrieval-admin-service:
+    build:
+      context: ./services/retrieval_admin
+    env_file: .env
+    environment:
+      API_PORT: 8010
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/rag_darovi
+      REDIS_CACHE_URL: redis://redis:6379/2
+      MINIO_ENDPOINT: minio:9000
+      MILVUS_HOST: milvus
+      OLLAMA_BASE_URL: http://ollama:11434
+      LLM_BASE_URL: http://ollama:11434/v1/
+    ports:
+      - "8010:8010"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  chatbot-response-service:
+    build:
+      context: ./services/chatbot_response
+    env_file: .env
+    environment:
+      API_PORT: 8020
+      REDIS_CACHE_URL: redis://redis:6379/2
+      RETRIEVAL_ADMIN_BASE_URL: http://retrieval-admin-service:8010
+      LLM_BASE_URL: http://ollama:11434/v1/
+    ports:
+      - "8020:8020"
+    depends_on:
+      redis:
+        condition: service_healthy
+      retrieval-admin-service:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+
   app-worker-vision:
     # Dedicated worker for the VLM stage. concurrency=1 because each VLM
     # call already saturates the GPU; running multiple at once would cause
     # OOM on common 16 GB cards. Scale horizontally by adding replicas.
-    build: .
+    build: ./legacy/rag-legacy-core
     command: celery -A src.worker.celery_app worker --loglevel=info --concurrency=1 -Q vision
     env_file: .env
     environment:
@@ -213,7 +289,7 @@ services:
         condition: service_healthy
 
   app-beat:
-    build: .
+    build: ./legacy/rag-legacy-core
     command: celery -A src.worker.celery_app beat --loglevel=info
     env_file: .env
     environment:
@@ -225,7 +301,7 @@ services:
   app-qa:
     profiles: ["qa"]
     build:
-      context: .
+      context: ./legacy/rag-legacy-core
       dockerfile: Dockerfile.dev
     env_file: .env
     environment:
