@@ -122,6 +122,131 @@ Published host ports:
 | 11435 | Ollama |
 | 11436 | Ollama Vision |
 
+## Container architecture
+
+### Runtime diagram
+
+```mermaid
+graph TB
+    subgraph browser["Browser"]
+        UI1["Dashboard / Chat UI\n(app.js · index.html · styles.css)"]
+    end
+
+    subgraph appServices["Application containers"]
+        subgraph appApi["app-api :8000"]
+            API1["FastAPI — /status /ingest /chat\n/dashboard/* /drive/* /files/*"]
+            FE["Static frontend\n(HTML · JS · CSS)"]
+        end
+        subgraph appWorker["app-worker"]
+            W1["Celery worker\nQueues: celery · default · embed\nTasks: download_file · convert_file\n        embed_file · poll_text_ready\n        poll_vision_pending · run_incremental_sync"]
+        end
+        subgraph appWorkerVision["app-worker-vision"]
+            W2["Celery worker\nQueue: vision (concurrency=1)\nTask: vision_extract"]
+        end
+        subgraph appBeat["app-beat"]
+            B1["Celery Beat scheduler\npoll_text_ready_for_embedding\npoll_vision_pending"]
+        end
+    end
+
+    subgraph microServices["Microservice containers"]
+        subgraph ingestRaw["ingest-raw-service :8030"]
+            IR["FastAPI /trigger/run\nLocalFolderDownloader / DriveDownloader\nUploads → MinIO RAW"]
+        end
+        subgraph extractText["extract-text-service :8031"]
+            ET["FastAPI /trigger/run\npdfplumber · python-docx · openpyxl\nQuality check → vision sentinel\nWrites → MinIO TEXT"]
+        end
+        subgraph retrievalAdmin["retrieval-admin-service :8010"]
+            RA["FastAPI /retrieve /health\nOllama embed → Milvus COSINE search\nRedis retrieval cache (DB 2)"]
+        end
+        subgraph chatbotResponse["chatbot-response-service :8020"]
+            CR["FastAPI /chat  WS /ws/chat\nCalls retrieval-admin over HTTP\nRedis conversation history (DB 2)\nOllama LLM completion"]
+        end
+    end
+
+    subgraph infrastructure["Infrastructure containers"]
+        subgraph pg["postgres :5432"]
+            PG1["PostgreSQL 16\nfile_records · sync_state\ndrive_connection · extracted_documents"]
+        end
+        subgraph rd["redis :6379"]
+            RD1["Redis 7\nDB 0 — Celery broker\nDB 1 — Celery results\nDB 2 — retrieval cache +\n        conversation history"]
+        end
+        subgraph mn["minio :9000"]
+            MN1["MinIO\nraw-files bucket\nconverted-texts bucket"]
+        end
+        subgraph mv["milvus :19530"]
+            MV1["Milvus standalone\nCollection: rag_darovi_docs\nPartitions: doc · sheet · pdf\nIndex: HNSW COSINE"]
+        end
+        subgraph etcd["milvus-etcd"]
+            ET2["etcd\nMilvus metadata store"]
+        end
+        subgraph ol["ollama :11435"]
+            OL1["Ollama\nEmbed model (nomic-embed-text)\nChat LLM (qwen3.5:9b)"]
+        end
+        subgraph olv["ollama-vision :11436"]
+            OV1["Ollama Vision\nllama3.2-vision:11b\nOCR + KV extraction"]
+        end
+    end
+
+    browser -->|HTTPS :8000| appApi
+    appApi -->|Celery tasks| rd
+    appWorker -->|consume| rd
+    appWorkerVision -->|consume vision queue| rd
+    appBeat -->|schedule| rd
+
+    appApi -->|HTTP trigger| ingestRaw
+    appApi -->|HTTP trigger| extractText
+    appApi -->|SQL| pg
+    appApi -->|Milvus SDK| mv
+    appApi -->|Redis| rd
+
+    ingestRaw -->|upload raw| mn
+    ingestRaw -->|upsert file_records| pg
+
+    extractText -->|download raw| mn
+    extractText -->|upload text| mn
+    extractText -->|update file_records| pg
+
+    appWorker -->|download/upload| mn
+    appWorker -->|update file_records| pg
+    appWorker -->|embed via| ol
+    appWorker -->|upsert vectors| mv
+
+    appWorkerVision -->|download raw+text| mn
+    appWorkerVision -->|OCR via| olv
+    appWorkerVision -->|update file_records| pg
+
+    retrievalAdmin -->|embed query| ol
+    retrievalAdmin -->|search vectors| mv
+    retrievalAdmin -->|cache| rd
+
+    chatbotResponse -->|retrieve context| retrievalAdmin
+    chatbotResponse -->|LLM completion| ol
+    chatbotResponse -->|conversation store| rd
+
+    mv --- etcd
+    mv --- mn
+```
+
+### Container responsibilities
+
+| Container | Image / Source | Role | Key assets |
+|-----------|---------------|------|------------|
+| **app-api** | `legacy/rag-legacy-core` | Main HTTP entrypoint | FastAPI app (`src/api/`), static frontend (`static/`), Celery task dispatcher |
+| **app-worker** | `legacy/rag-legacy-core` | Async pipeline worker | `download_file`, `convert_file`, `embed_file`, `poll_text_ready_for_embedding`, `poll_vision_pending`, `run_incremental_sync` Celery tasks |
+| **app-worker-vision** | `legacy/rag-legacy-core` | Dedicated OCR worker | `vision_extract` Celery task (concurrency 1, owns the `vision` queue) |
+| **app-beat** | `legacy/rag-legacy-core` | Celery Beat scheduler | Fires `poll_text_ready_for_embedding` and `poll_vision_pending` on a configurable interval |
+| **ingest-raw-service** | `services/ingest_raw` | Ingestion microservice | Polls local folder or Google Drive; uploads binaries to MinIO `raw-files`; writes `file_records` |
+| **extract-text-service** | `services/extract_text` | Text extraction microservice | Reads MinIO RAW; runs pdfplumber / docx / xlsx extractors with per-page quality check; emits vision sentinels for scanned pages; writes to MinIO `converted-texts` |
+| **retrieval-admin-service** | `services/retrieval_admin` | Retrieval API | Embeds queries via Ollama, searches Milvus, caches results in Redis |
+| **chatbot-response-service** | `services/chatbot_response` | Chat API | REST + WebSocket chat; stores conversation history in Redis; calls retrieval-admin; calls Ollama LLM |
+| **postgres** | `postgres:16-alpine` | Relational metadata store | `file_records`, `sync_state`, `drive_connection`, `extracted_documents` tables |
+| **redis** | `redis:7-alpine` | Broker + cache + store | DB 0: Celery broker · DB 1: Celery results · DB 2: retrieval cache + conversation history |
+| **minio** | `minio/minio` | Object storage | `raw-files` bucket (original binaries) · `converted-texts` bucket (extracted markdown) |
+| **milvus** | `milvusdb/milvus:v2.4.21` | Vector database | `rag_darovi_docs` collection, HNSW COSINE index, partitions `doc / sheet / pdf` |
+| **milvus-etcd** | `quay.io/coreos/etcd:v3.5.18` | Milvus metadata store | Internal etcd cluster required by Milvus standalone |
+| **ollama** | `ollama/ollama` | Embed + chat LLM | `nomic-embed-text` (embeddings) · `qwen3.5:9b` (chat completions) |
+| **ollama-vision** | `ollama/ollama` | Vision LLM | `llama3.2-vision:11b` (OCR + KV extraction for scanned PDFs) |
+
 Smoke check:
 
 ```bash
