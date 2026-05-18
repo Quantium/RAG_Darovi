@@ -16,6 +16,48 @@ For the second cleanup history and rationale, see [docs/repo-split/REPO_SPLIT_MA
 
 The legacy monolith image (`app-api`, `app-worker`, `app-worker-vision`, `app-beat`, `app-qa`) is built from the `legacy/rag-legacy-core` submodule.
 
+## Standard relationship diagram
+
+```mermaid
+flowchart LR
+subgraph orchestratorRepo [OrchestratorRepo]
+orchestrator[RAG_Darovi]
+end
+
+subgraph serviceRepos [ServiceRepos]
+ingest[rag-service-ingest-raw]
+extract[rag-service-extract-text]
+retrieval[rag-service-retrieval-admin]
+chatbot[rag-service-chatbot-response]
+legacy[rag-legacy-core]
+schema[rag-schema]
+contracts[rag-e2e-contracts]
+end
+
+orchestrator --> ingest
+orchestrator --> extract
+orchestrator --> retrieval
+orchestrator --> chatbot
+orchestrator --> legacy
+orchestrator --> schema
+orchestrator --> contracts
+
+ingest --> extract
+ingest --> schema
+extract --> schema
+extract --> retrieval
+retrieval --> schema
+chatbot --> retrieval
+legacy --> schema
+
+contracts --> schema
+contracts --> retrieval
+contracts --> chatbot
+contracts --> ingest
+contracts --> extract
+contracts --> legacy
+```
+
 ## Prerequisites
 
 - Docker Engine and Docker Compose v2 (`docker compose`).
@@ -34,6 +76,30 @@ cp .env.example .env
 ```
 
 Edit `.env`. The file is gitignored.
+
+## Update all submodules
+
+Use this workflow whenever you want the orchestrator to point to the latest commits published in each sub-repository:
+
+```bash
+# 1) Sync URL metadata from .gitmodules
+git submodule sync --recursive
+
+# 2) Pull latest commits for every submodule tracking branch
+git submodule update --init --recursive --remote
+
+# 3) Review what changed
+git submodule status
+git status
+```
+
+If submodule pointers changed, commit them in the orchestrator:
+
+```bash
+git add .gitmodules services legacy schema qa
+git commit -m "chore: update submodule pointers"
+git push
+```
 
 ## Run with Docker Compose
 
