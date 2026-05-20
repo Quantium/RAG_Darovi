@@ -7,17 +7,17 @@ This document defines local verification gates for the multi-repo orchestrated s
 - Stable reference tag: `v0.8.0`.
 - Use this tag as the recovery anchor if any separation phase introduces regressions.
 
-## Legacy gate
+## Dashboard gate
 
 Run from orchestrator root:
 
 ```bash
-make qa-legacy
+make qa-dashboard
 ```
 
 Expected:
 
-- `legacy/rag-legacy-core`: full unit suite passes (185 tests, integration deselected).
+- `dashboard/rag-dashboard-core`: full unit suite passes (185 tests, integration deselected).
 
 ## Service-level gates
 

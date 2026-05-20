@@ -16,6 +16,6 @@
 [submodule "qa/rag-e2e-contracts"]
 	path = qa/rag-e2e-contracts
 	url = git@github.com:Quantium/rag-e2e-contracts.git
-[submodule "legacy/rag-legacy-core"]
-	path = legacy/rag-legacy-core
+[submodule "dashboard/rag-dashboard-core"]
+	path = dashboard/rag-dashboard-core
 	url = git@github.com:Quantium/rag-legacy-core.git

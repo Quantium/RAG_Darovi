@@ -10,11 +10,11 @@ For the second cleanup history and rationale, see [docs/repo-split/REPO_SPLIT_MA
 - `services/extract_text` -> [Quantium/rag-service-extract-text](https://github.com/Quantium/rag-service-extract-text)
 - `services/retrieval_admin` -> [Quantium/rag-service-retrieval-admin](https://github.com/Quantium/rag-service-retrieval-admin)
 - `services/chatbot_response` -> [Quantium/rag-service-chatbot-response](https://github.com/Quantium/rag-service-chatbot-response)
-- `legacy/rag-legacy-core` -> [Quantium/rag-legacy-core](https://github.com/Quantium/rag-legacy-core)
+- `dashboard/rag-dashboard-core` -> [Quantium/rag-legacy-core](https://github.com/Quantium/rag-legacy-core)
 - `schema/rag-schema` -> [Quantium/rag-schema](https://github.com/Quantium/rag-schema)
 - `qa/rag-e2e-contracts` -> [Quantium/rag-e2e-contracts](https://github.com/Quantium/rag-e2e-contracts)
 
-The legacy monolith image (`app-api`, `app-worker`, `app-worker-vision`, `app-beat`, `app-qa`) is built from the `legacy/rag-legacy-core` submodule.
+The dashboard monolith image (`dashboard-api`, `dashboard-worker`, `dashboard-worker-vision`, `dashboard-beat`, `dashboard-qa`) is built from the `dashboard/rag-dashboard-core` submodule.
 
 ## Standard relationship diagram
 
@@ -29,7 +29,7 @@ ingest[rag-service-ingest-raw]
 extract[rag-service-extract-text]
 retrieval[rag-service-retrieval-admin]
 chatbot[rag-service-chatbot-response]
-legacy[rag-legacy-core]
+dashboard[rag-dashboard-core]
 schema[rag-schema]
 contracts[rag-e2e-contracts]
 end
@@ -38,7 +38,7 @@ orchestrator --> ingest
 orchestrator --> extract
 orchestrator --> retrieval
 orchestrator --> chatbot
-orchestrator --> legacy
+orchestrator --> dashboard
 orchestrator --> schema
 orchestrator --> contracts
 
@@ -48,14 +48,14 @@ extract --> schema
 extract --> retrieval
 retrieval --> schema
 chatbot --> retrieval
-legacy --> schema
+dashboard --> schema
 
 contracts --> schema
 contracts --> retrieval
 contracts --> chatbot
 contracts --> ingest
 contracts --> extract
-contracts --> legacy
+contracts --> dashboard
 ```
 
 ## Prerequisites
@@ -96,7 +96,7 @@ git status
 If submodule pointers changed, commit them in the orchestrator:
 
 ```bash
-git add .gitmodules services legacy schema qa
+git add .gitmodules services dashboard schema qa
 git commit -m "chore: update submodule pointers"
 git push
 ```
@@ -112,7 +112,7 @@ Published host ports:
 
 | Port | Service |
 |------|---------|
-| 8000 | Legacy API + chat UI (`app-api`) |
+| 8000 | Dashboard API + chat UI (`dashboard-api`) |
 | 8010 | Retrieval/admin API (`retrieval-admin-service`) |
 | 8020 | Chatbot response API (`chatbot-response-service`) |
 | 5432 | PostgreSQL |
@@ -133,17 +133,17 @@ graph TB
     end
 
     subgraph appServices["Application containers"]
-        subgraph appApi["app-api :8000"]
+        subgraph appApi["dashboard-api :8000"]
             API1["FastAPI — /status /ingest /chat\n/dashboard/* /drive/* /files/*"]
             FE["Static frontend\n(HTML · JS · CSS)"]
         end
-        subgraph appWorker["app-worker"]
+        subgraph appWorker["dashboard-worker"]
             W1["Celery worker\nQueues: celery · default · embed\nTasks: download_file · convert_file\n        embed_file · poll_text_ready\n        poll_vision_pending · run_incremental_sync"]
         end
-        subgraph appWorkerVision["app-worker-vision"]
+        subgraph appWorkerVision["dashboard-worker-vision"]
             W2["Celery worker\nQueue: vision (concurrency=1)\nTask: vision_extract"]
         end
-        subgraph appBeat["app-beat"]
+        subgraph appBeat["dashboard-beat"]
             B1["Celery Beat scheduler\npoll_text_ready_for_embedding\npoll_vision_pending"]
         end
     end
@@ -231,10 +231,10 @@ graph TB
 
 | Container | Image / Source | Role | Key assets |
 |-----------|---------------|------|------------|
-| **app-api** | `legacy/rag-legacy-core` | Main HTTP entrypoint | FastAPI app (`src/api/`), static frontend (`static/`), Celery task dispatcher |
-| **app-worker** | `legacy/rag-legacy-core` | Async pipeline worker | `download_file`, `convert_file`, `embed_file`, `poll_text_ready_for_embedding`, `poll_vision_pending`, `run_incremental_sync` Celery tasks |
-| **app-worker-vision** | `legacy/rag-legacy-core` | Dedicated OCR worker | `vision_extract` Celery task (concurrency 1, owns the `vision` queue) |
-| **app-beat** | `legacy/rag-legacy-core` | Celery Beat scheduler | Fires `poll_text_ready_for_embedding` and `poll_vision_pending` on a configurable interval |
+| **dashboard-api** | `dashboard/rag-dashboard-core` | Main HTTP entrypoint | FastAPI app (`src/api/`), static frontend (`static/`), Celery task dispatcher |
+| **dashboard-worker** | `dashboard/rag-dashboard-core` | Async pipeline worker | `download_file`, `convert_file`, `embed_file`, `poll_text_ready_for_embedding`, `poll_vision_pending`, `run_incremental_sync` Celery tasks |
+| **dashboard-worker-vision** | `dashboard/rag-dashboard-core` | Dedicated OCR worker | `vision_extract` Celery task (concurrency 1, owns the `vision` queue) |
+| **dashboard-beat** | `dashboard/rag-dashboard-core` | Celery Beat scheduler | Fires `poll_text_ready_for_embedding` and `poll_vision_pending` on a configurable interval |
 | **ingest-raw-service** | `services/ingest_raw` | Ingestion microservice | Polls local folder or Google Drive; uploads binaries to MinIO `raw-files`; writes `file_records` |
 | **extract-text-service** | `services/extract_text` | Text extraction microservice | Reads MinIO RAW; runs pdfplumber / docx / xlsx extractors with per-page quality check; emits vision sentinels for scanned pages; writes to MinIO `converted-texts` |
 | **retrieval-admin-service** | `services/retrieval_admin` | Retrieval API | Embeds queries via Ollama, searches Milvus, caches results in Redis |
@@ -261,7 +261,7 @@ curl -fsS http://localhost:8020/health
 
 | Target | What it does |
 |--------|--------------|
-| `make qa-legacy` | Run the legacy core unit suite from its submodule |
+| `make qa-dashboard` | Run the dashboard core unit suite from its submodule |
 | `make qa-services` | Run the test suite of every service submodule |
 | `make qa-cross` | Run cross-service contracts (`qa/rag-e2e-contracts`) |
 | `make qa-all` | All of the above in order |
@@ -276,12 +276,12 @@ Each submodule provides its own Makefile. The orchestrator targets bootstrap a v
 | `make down` | `docker compose down` |
 | `make submodules` | Sync and initialize all submodules |
 | `make docker-build` | `docker compose build` |
-| `make docker-qa` | Build and run `app-qa` (profile `qa`) |
+| `make docker-qa` | Build and run `dashboard-qa` (profile `qa`) |
 | `make tls-certs` | Generate local TLS certificates under `./certs` |
-| `make qa-legacy` | Run legacy core test gate |
+| `make qa-dashboard` | Run dashboard core test gate |
 | `make qa-services` | Run all service submodule test gates |
 | `make qa-cross` | Run cross-service contract tests |
-| `make qa-all` | Run legacy + services + cross gates |
+| `make qa-all` | Run dashboard + services + cross gates |
 | `make clean` | `docker compose down -v` and remove `__pycache__` |
 
 ## Rollback
@@ -312,7 +312,7 @@ API_SSL_CERTFILE=/etc/rag/certs/cert.pem
 API_SSL_KEYFILE=/etc/rag/certs/key.pem
 ```
 
-The `app-api` container mounts `./certs:/etc/rag/certs:ro`. The legacy entrypoint enables uvicorn TLS automatically when both files exist.
+The `dashboard-api` container mounts `./certs:/etc/rag/certs:ro`. The dashboard entrypoint enables uvicorn TLS automatically when both files exist.
 
 ## FAQ
 
@@ -330,4 +330,4 @@ Confirm the service account JSON, `DRIVE_FOLDER_ID`, and Drive API enablement. M
 
 ### Where does service code live?
 
-Inside each submodule. Browse, for example, [services/retrieval_admin/README.md](services/retrieval_admin/README.md), [legacy/rag-legacy-core/README.md](legacy/rag-legacy-core/README.md), or open the corresponding GitHub repo from the table above.
+Inside each submodule. Browse, for example, [services/retrieval_admin/README.md](services/retrieval_admin/README.md), [dashboard/rag-dashboard-core/README.md](dashboard/rag-dashboard-core/README.md), or open the corresponding GitHub repo from the table above.

@@ -1,4 +1,4 @@
-.PHONY: up down clean docker-build docker-qa tls-certs submodules qa-legacy qa-services qa-cross qa-all
+.PHONY: up down clean docker-build docker-qa tls-certs submodules qa-dashboard qa-services qa-cross qa-all
 
 up:
 	docker compose up -d
@@ -11,8 +11,8 @@ docker-build:
 	docker compose build
 
 docker-qa:
-	docker compose --profile qa build app-qa
-	docker compose --profile qa run --rm app-qa
+	docker compose --profile qa build dashboard-qa
+	docker compose --profile qa run --rm dashboard-qa
 
 tls-certs:
 	./scripts/generate-local-certs.sh ./certs
@@ -20,8 +20,8 @@ tls-certs:
 down:
 	docker compose down
 
-qa-legacy:
-	cd legacy/rag-legacy-core && make install && make test
+qa-dashboard:
+	cd dashboard/rag-dashboard-core && make install && make test
 
 qa-services:
 	cd services/ingest_raw && make install && make test
@@ -32,7 +32,7 @@ qa-services:
 qa-cross:
 	cd qa/rag-e2e-contracts && make install && make test
 
-qa-all: qa-legacy qa-services qa-cross
+qa-all: qa-dashboard qa-services qa-cross
 
 clean:
 	docker compose down -v

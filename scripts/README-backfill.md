@@ -33,7 +33,7 @@ New inserts default `raw_status` and `text_status` to `'pending'` (`upsert_file`
 
 ### Legacy worker (`poll_text_ready_for_embedding`)
 
-`SyncMetadataRepository.list_ready_for_embedding_sync` selects `text_status == 'ready_for_embedding'` only (`legacy/rag-legacy-core/src/metadata/repository.py`). Nothing is dispatched to Milvus until TEXT reaches that state.
+`SyncMetadataRepository.list_ready_for_embedding_sync` selects `text_status == 'ready_for_embedding'` only (`dashboard/rag-dashboard-core/src/metadata/repository.py`). Nothing is dispatched to Milvus until TEXT reaches that state.
 
 ### Schema reference (`file_records`)
 
@@ -217,7 +217,7 @@ Patch `docker-compose.yml` under `ingest-raw-service` (illustrative — keep ind
 
 Writes use **timezone-aware** UTC:
 
-- `MetadataRepository.update_last_processed_at` (async): `legacy/rag-legacy-core/src/metadata/repository.py` approximately lines 156–160.
+- `MetadataRepository.update_last_processed_at` (async): `dashboard/rag-dashboard-core/src/metadata/repository.py` approximately lines 156–160.
 - `SyncMetadataRepository.update_last_processed_at` (sync): same file, approximately lines 395–399.
 
 The ORM maps `last_processed_at` with `DateTime` **without** `timezone=True` on `FileRecord` (see `FileRecord` definition, `drive_modified_at` / `last_processed_at` / `raw_synced_at` / `text_extracted_at`, ~lines 37–50). PostgreSQL columns are therefore untyped “timestamp without time zone”. If you see warnings or comparisons mixing aware and naive datetimes in Python or other services, consider fixing the model to use `DateTime(timezone=True)` in a dedicated schema change (`rag-schema`), not as part of this backfill.

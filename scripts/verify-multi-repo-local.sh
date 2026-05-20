@@ -5,8 +5,8 @@ echo "[1/5] Sync submodules"
 git submodule sync --recursive
 git submodule update --init --recursive
 
-echo "[2/5] Run legacy core gate"
-make qa-legacy
+echo "[2/5] Run dashboard core gate"
+make qa-dashboard
 
 echo "[3/5] Run service test gates"
 make qa-services

@@ -16,11 +16,11 @@ The orchestrator runs the RAG Darovi platform locally via Docker Compose. It mou
 | `services/extract_text` | `Quantium/rag-service-extract-text` | Text extraction from RAW into MinIO TEXT |
 | `services/retrieval_admin` | `Quantium/rag-service-retrieval-admin` | Retrieval/admin API + simplified UI |
 | `services/chatbot_response` | `Quantium/rag-service-chatbot-response` | Chat API + minimal chat UI |
-| `legacy/rag-legacy-core` | `Quantium/rag-legacy-core` | Legacy FastAPI + Celery monolith pending further decomposition |
+| `dashboard/rag-dashboard-core` | `Quantium/rag-legacy-core` | Dashboard FastAPI + Celery monolith pending further decomposition |
 | `schema/rag-schema` | `Quantium/rag-schema` | Shared Alembic migrations |
 | `qa/rag-e2e-contracts` | `Quantium/rag-e2e-contracts` | Cross-service contracts and Playwright e2e |
 
-The legacy monolith image powers the `app-api`, `app-worker`, `app-worker-vision`, `app-beat` and `app-qa` Compose services. The other Compose services build directly from their submodule path.
+The dashboard monolith image powers the `dashboard-api`, `dashboard-worker`, `dashboard-worker-vision`, `dashboard-beat` and `dashboard-qa` Compose services. The other Compose services build directly from their submodule path.
 
 ---
 
@@ -34,12 +34,12 @@ docs/repo-split/           # Split history, mapping and verification gates
 .env.example               # Environment template for the full stack
 production.env.example     # Production environment template
 services/                  # Submodules: independent service repos
-legacy/rag-legacy-core/    # Submodule: legacy core
+dashboard/rag-dashboard-core/  # Submodule: dashboard core
 schema/rag-schema/         # Submodule: shared Alembic
 qa/rag-e2e-contracts/      # Submodule: cross-service contracts
 ```
 
-There is no `src/`, `tests/`, `config/` or `requirements.txt` in this repo: those moved to `legacy/rag-legacy-core` during the second cleanup.
+There is no `src/`, `tests/`, `config/` or `requirements.txt` in this repo: those moved to `dashboard/rag-dashboard-core` during the second cleanup.
 
 ---
 
@@ -58,7 +58,7 @@ Run from the orchestrator root:
 
 | Target | What it does |
 |--------|--------------|
-| `make qa-legacy` | Run legacy core unit suite |
+| `make qa-dashboard` | Run dashboard core unit suite |
 | `make qa-services` | Run unit suite of each service submodule |
 | `make qa-cross` | Run cross-service contract tests (HTTP + schema) |
 | `make qa-all` | All of the above in order |
@@ -89,8 +89,8 @@ make submodules     # git submodule sync + update
 make up             # docker compose up -d
 make down           # docker compose down
 make docker-build   # docker compose build
-make docker-qa      # legacy core QA image
-make qa-legacy      # legacy core unit tests
+make docker-qa      # dashboard core QA image
+make qa-dashboard   # dashboard core unit tests
 make qa-services    # all service unit tests
 make qa-cross       # cross-service contracts
 make qa-all         # all gates above
@@ -108,7 +108,7 @@ make clean          # down -v + cleanup __pycache__
 | Modify retrieval logic | `services/retrieval_admin` |
 | Modify text extraction | `services/extract_text` |
 | Modify ingestion source | `services/ingest_raw` |
-| Modify the legacy worker / vision pipeline | `legacy/rag-legacy-core` |
+| Modify the dashboard worker / vision pipeline | `dashboard/rag-dashboard-core` |
 | Add or change a DB migration | `schema/rag-schema` |
 | Add cross-service contracts or e2e specs | `qa/rag-e2e-contracts` |
 | Adjust orchestration (compose, env, scripts) | this repository |
