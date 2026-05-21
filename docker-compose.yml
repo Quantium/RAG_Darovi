@@ -155,10 +155,11 @@ services:
       <<: *app-env
       INGEST_RAW_TRIGGER_URL: http://ingest-raw-service:8030
       EXTRACT_TEXT_TRIGGER_URL: http://extract-text-service:8031
+      LOCAL_SOURCE_FOLDER: /app/LABORATORIOS
     volumes:
       # Mount generated certs (see scripts/generate-local-certs.sh); optional if API_SSL_* unset
       - ./certs:/etc/rag/certs:ro
-      - ./LICITACIONES:/app/LICITACIONES:ro
+      - ./LABORATORIOS:/app/LABORATORIOS:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -180,8 +181,9 @@ services:
     env_file: .env
     environment:
       <<: *app-env
+      LOCAL_SOURCE_FOLDER: /app/LABORATORIOS
     volumes:
-      - ./LICITACIONES:/app/LICITACIONES:ro
+      - ./LABORATORIOS:/app/LABORATORIOS:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -204,8 +206,9 @@ services:
       INGEST_RAW_CRON: ${INGEST_RAW_CRON:-0 * * * *}
       INGEST_RAW_PAGE_SIZE: ${INGEST_RAW_PAGE_SIZE:-200}
       INGEST_RAW_RUN_ON_START: ${INGEST_RAW_RUN_ON_START:-true}
+      LOCAL_SOURCE_FOLDER: /app/LABORATORIOS
     volumes:
-      - ./LICITACIONES:/app/LICITACIONES:ro
+      - ./LABORATORIOS:/app/LABORATORIOS:ro
     depends_on:
       postgres:
         condition: service_healthy
