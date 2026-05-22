@@ -12,6 +12,10 @@ x-app-env: &app-env
   # VLM lives in a dedicated container so it does not evict embedding/chat
   # models from VRAM. See migration plan section 2.1 for the reasoning.
   VISION_BASE_URL: http://ollama-vision:11434
+  EMBED_USE_EXTERNAL_API: ${EMBED_USE_EXTERNAL_API:-FALSE}
+  EMBED_EXTERNAL_API_URL: ${EMBED_EXTERNAL_API_URL:-https://api.openai.com/v1}
+  EMBED_EXTERNAL_API_KEY: ${EMBED_EXTERNAL_API_KEY:-}
+  EMBED_EXTERNAL_MODEL: ${EMBED_EXTERNAL_MODEL:-text-embedding-3-large}
 
 services:
   redis:
@@ -97,6 +101,7 @@ services:
 
   ollama:
     image: ollama/ollama
+    profiles: ["local-embed"]
     env_file: .env
     environment:
       # Embedding workload is bursty and short-lived; keep models warm but
@@ -126,6 +131,9 @@ services:
     # heavy multi-page request cannot starve embeddings or chat. KEEP_ALIVE
     # is short so the model gets unloaded between bursts and the embedder
     # can claim VRAM without competition.
+    # Only started in local mode: docker compose --profile local-vision up
+    # When VISION_EXTERNAL=true, omit --profile local-vision to skip this container.
+    profiles: ["local-vision"]
     image: ollama/ollama
     env_file: .env
     environment:
@@ -156,6 +164,7 @@ services:
       INGEST_RAW_TRIGGER_URL: http://ingest-raw-service:8030
       EXTRACT_TEXT_TRIGGER_URL: http://extract-text-service:8031
       LOCAL_SOURCE_FOLDER: /app/LABORATORIOS
+      EMBED_REQUEST_TIMEOUT_S: 600
     volumes:
       # Mount generated certs (see scripts/generate-local-certs.sh); optional if API_SSL_* unset
       - ./certs:/etc/rag/certs:ro
@@ -166,8 +175,6 @@ services:
       postgres:
         condition: service_healthy
       milvus:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "/usr/local/bin/docker-healthcheck-api.sh"]
@@ -182,6 +189,7 @@ services:
     environment:
       <<: *app-env
       LOCAL_SOURCE_FOLDER: /app/LABORATORIOS
+      EMBED_REQUEST_TIMEOUT_S: 600
     volumes:
       - ./LABORATORIOS:/app/LABORATORIOS:ro
     depends_on:
@@ -192,8 +200,6 @@ services:
       milvus:
         condition: service_healthy
       minio:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
 
   ingest-raw-service:
@@ -244,6 +250,10 @@ services:
       MILVUS_HOST: milvus
       OLLAMA_BASE_URL: http://ollama:11434
       LLM_BASE_URL: http://ollama:11434/v1/
+      EMBED_USE_EXTERNAL_API: ${EMBED_USE_EXTERNAL_API:-FALSE}
+      EMBED_EXTERNAL_API_URL: ${EMBED_EXTERNAL_API_URL:-https://api.openai.com/v1}
+      EMBED_EXTERNAL_API_KEY: ${EMBED_EXTERNAL_API_KEY:-}
+      EMBED_EXTERNAL_MODEL: ${EMBED_EXTERNAL_MODEL:-text-embedding-3-large}
     ports:
       - "8010:8010"
     depends_on:
@@ -254,8 +264,6 @@ services:
       minio:
         condition: service_healthy
       milvus:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
 
   chatbot-response-service:
@@ -295,8 +303,6 @@ services:
       milvus:
         condition: service_healthy
       minio:
-        condition: service_healthy
-      ollama-vision:
         condition: service_healthy
 
   dashboard-beat:
