@@ -47,16 +47,31 @@ PG_SIZE=$(du -sh "$BACKUP_DIR/postgres.sql.gz" | cut -f1)
 echo "  OK  postgres.sql.gz  ($PG_SIZE)"
 
 # ── 2. MinIO converted-texts ──────────────────────────────────────────────────
+# Uses Python minio client in dashboard-api (streams tar.gz to stdout → host file).
+# The minio container image has no tar binary, so we avoid it entirely.
 echo ""
 echo "[2/4] MinIO converted-texts..."
-# mc mirror inside the minio container writes to /tmp, then tar is piped to stdout → host file
-docker compose exec -T minio sh -c '
-    mc alias set local http://localhost:9000 minioadmin minioadmin --quiet 2>/dev/null || true
-    rm -rf /tmp/cts-bak
-    mc mirror --quiet local/converted-texts /tmp/cts-bak 2>/dev/null
-    tar czf - -C /tmp/cts-bak .
-    rm -rf /tmp/cts-bak
-' > "$BACKUP_DIR/minio_converted_texts.tar.gz"
+docker compose exec -T dashboard-api python3 << 'PYEOF' > "$BACKUP_DIR/minio_converted_texts.tar.gz"
+import sys, io, tarfile
+from minio import Minio
+
+client = Minio("minio:9000", access_key="minioadmin", secret_key="minioadmin", secure=False)
+bucket = "converted-texts"
+
+count = 0
+tf = tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz")
+for obj in client.list_objects(bucket, recursive=True):
+    resp = client.get_object(bucket, obj.object_name)
+    data = resp.read()
+    info = tarfile.TarInfo(name=obj.object_name)
+    info.size = len(data)
+    info.mtime = int(obj.last_modified.timestamp()) if obj.last_modified else 0
+    tf.addfile(info, io.BytesIO(data))
+    count += 1
+    print(f"  {count}: {obj.object_name}", file=sys.stderr, flush=True)
+tf.close()
+print(f"  Archived {count} objects", file=sys.stderr)
+PYEOF
 CTS_SIZE=$(du -sh "$BACKUP_DIR/minio_converted_texts.tar.gz" | cut -f1)
 echo "  OK  minio_converted_texts.tar.gz  ($CTS_SIZE)"
 
@@ -83,30 +98,55 @@ col.load()
 total = int(col.num_entities)
 print(f"  {total:,} vectors in collection", flush=True)
 
+if total == 0:
+    import pandas as pd
+    pd.DataFrame(columns=["id","source_file_id","source_name","document_type",
+                           "section_title","chunk_index","text","embedding"]
+                ).to_parquet("/tmp/milvus_vectors.parquet", index=False, engine="pyarrow")
+    print("  Collection is empty — wrote empty parquet")
+    sys.exit(0)
+
 import pandas as pd
 
-rows = []
-batch = 5000
+# Batch size kept small (200) to stay within Milvus gRPC message size limit.
+# Each batch = 200 × (12 KB embedding + variable text) ≈ 2-5 MB, well under 64 MB.
+BATCH = 200
+meta_rows = []
+emb_rows  = []
 offset = 0
 
 while True:
-    chunk = col.query(
+    # Query metadata fields (no embedding — avoids hitting limit when texts are long)
+    meta = col.query(
         expr="chunk_index >= 0",
         output_fields=["id", "source_file_id", "source_name", "document_type",
-                       "section_title", "chunk_index", "text", "embedding"],
+                       "section_title", "chunk_index", "text"],
         offset=offset,
-        limit=batch,
+        limit=BATCH,
     )
-    if not chunk:
-        break
-    rows.extend(chunk)
-    offset += len(chunk)
-    pct = 100 * offset // max(total, 1)
-    print(f"  {offset:,} / {total:,}  ({pct}%)", end="\r", flush=True)
-    if len(chunk) < batch:
+    if not meta:
         break
 
-df = pd.DataFrame(rows)
+    # Query embeddings for the same batch using primary-key filter
+    ids = [r["id"] for r in meta]
+    id_list = '", "'.join(ids)
+    emb = col.query(
+        expr=f'id in ["{id_list}"]',
+        output_fields=["id", "embedding"],
+    )
+    emb_by_id = {r["id"]: r["embedding"] for r in emb}
+
+    for r in meta:
+        r["embedding"] = emb_by_id.get(r["id"], [])
+    meta_rows.extend(meta)
+
+    offset += len(meta)
+    pct = 100 * offset // max(total, 1)
+    print(f"  {offset:,} / {total:,}  ({pct}%)", end="\r", flush=True)
+    if len(meta) < BATCH:
+        break
+
+df = pd.DataFrame(meta_rows)
 df.to_parquet("/tmp/milvus_vectors.parquet", index=False, engine="pyarrow")
 mb = df.memory_usage(deep=True).sum() / 1_000_000
 print(f"\n  Exported {len(df):,} rows  ({mb:.0f} MB in-memory)")
@@ -124,13 +164,28 @@ echo "  OK  milvus_vectors.parquet  ($MV_SIZE)"
 if [[ "$INCLUDE_RAW" == "true" ]]; then
     echo ""
     echo "[4/4] MinIO raw-files (this may take several minutes for large buckets)..."
-    docker compose exec -T minio sh -c '
-        mc alias set local http://localhost:9000 minioadmin minioadmin --quiet 2>/dev/null || true
-        rm -rf /tmp/raw-bak
-        mc mirror --quiet local/raw-files /tmp/raw-bak 2>/dev/null
-        tar czf - -C /tmp/raw-bak .
-        rm -rf /tmp/raw-bak
-    ' > "$BACKUP_DIR/minio_raw_files.tar.gz"
+    docker compose exec -T dashboard-api python3 << 'PYEOF' > "$BACKUP_DIR/minio_raw_files.tar.gz"
+import sys, io, tarfile
+from minio import Minio
+
+client = Minio("minio:9000", access_key="minioadmin", secret_key="minioadmin", secure=False)
+bucket = "raw-files"
+
+count = 0
+tf = tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz")
+for obj in client.list_objects(bucket, recursive=True):
+    resp = client.get_object(bucket, obj.object_name)
+    data = resp.read()
+    info = tarfile.TarInfo(name=obj.object_name)
+    info.size = len(data)
+    info.mtime = int(obj.last_modified.timestamp()) if obj.last_modified else 0
+    tf.addfile(info, io.BytesIO(data))
+    count += 1
+    if count % 50 == 0:
+        print(f"  {count} files...", file=sys.stderr, flush=True)
+tf.close()
+print(f"  Archived {count} objects", file=sys.stderr)
+PYEOF
     RAW_SIZE=$(du -sh "$BACKUP_DIR/minio_raw_files.tar.gz" | cut -f1)
     echo "  OK  minio_raw_files.tar.gz  ($RAW_SIZE)"
 else

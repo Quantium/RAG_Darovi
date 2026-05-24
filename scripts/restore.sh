@@ -55,15 +55,27 @@ fi
 if [[ -f "$BACKUP_DIR/minio_converted_texts.tar.gz" ]]; then
     echo ""
     echo "[2] MinIO converted-texts restore..."
-    cat "$BACKUP_DIR/minio_converted_texts.tar.gz" \
-        | docker compose exec -T minio sh -c '
-            mc alias set local http://localhost:9000 minioadmin minioadmin --quiet 2>/dev/null || true
-            rm -rf /tmp/cts-restore
-            mkdir -p /tmp/cts-restore
-            tar xzf - -C /tmp/cts-restore
-            mc mirror --quiet --overwrite /tmp/cts-restore local/converted-texts 2>/dev/null
-            rm -rf /tmp/cts-restore
-        '
+    DASH=$(docker compose ps -q dashboard-api)
+    docker cp "$BACKUP_DIR/minio_converted_texts.tar.gz" "$DASH:/tmp/cts-restore.tar.gz"
+    docker compose exec -T dashboard-api python3 << 'PYEOF'
+import tarfile, os, io
+from minio import Minio
+
+client = Minio("minio:9000", access_key="minioadmin", secret_key="minioadmin", secure=False)
+bucket = "converted-texts"
+count = 0
+with tarfile.open("/tmp/cts-restore.tar.gz", "r:gz") as tf:
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        f = tf.extractfile(member)
+        if f:
+            data = f.read()
+            client.put_object(bucket, member.name.lstrip("./"), io.BytesIO(data), len(data))
+            count += 1
+print(f"  Restored {count} objects to {bucket}")
+PYEOF
+    docker compose exec -T dashboard-api rm -f /tmp/cts-restore.tar.gz
     echo "  OK  converted-texts restored"
 else
     echo ""
@@ -74,15 +86,29 @@ fi
 if [[ -f "$BACKUP_DIR/minio_raw_files.tar.gz" ]]; then
     echo ""
     echo "[3] MinIO raw-files restore..."
-    cat "$BACKUP_DIR/minio_raw_files.tar.gz" \
-        | docker compose exec -T minio sh -c '
-            mc alias set local http://localhost:9000 minioadmin minioadmin --quiet 2>/dev/null || true
-            rm -rf /tmp/raw-restore
-            mkdir -p /tmp/raw-restore
-            tar xzf - -C /tmp/raw-restore
-            mc mirror --quiet --overwrite /tmp/raw-restore local/raw-files 2>/dev/null
-            rm -rf /tmp/raw-restore
-        '
+    DASH=$(docker compose ps -q dashboard-api)
+    docker cp "$BACKUP_DIR/minio_raw_files.tar.gz" "$DASH:/tmp/raw-restore.tar.gz"
+    docker compose exec -T dashboard-api python3 << 'PYEOF'
+import tarfile, io
+from minio import Minio
+
+client = Minio("minio:9000", access_key="minioadmin", secret_key="minioadmin", secure=False)
+bucket = "raw-files"
+count = 0
+with tarfile.open("/tmp/raw-restore.tar.gz", "r:gz") as tf:
+    for member in tf.getmembers():
+        if not member.isfile():
+            continue
+        f = tf.extractfile(member)
+        if f:
+            data = f.read()
+            client.put_object(bucket, member.name.lstrip("./"), io.BytesIO(data), len(data))
+            count += 1
+            if count % 50 == 0:
+                print(f"  {count} files restored...", flush=True)
+print(f"  Restored {count} objects to {bucket}")
+PYEOF
+    docker compose exec -T dashboard-api rm -f /tmp/raw-restore.tar.gz
     echo "  OK  raw-files restored"
 else
     echo ""
