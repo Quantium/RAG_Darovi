@@ -1,0 +1,50 @@
+# Core
+fastapi>=0.111,<1
+uvicorn[standard]>=0.30,<1
+itsdangerous>=2.2,<3
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+
+# PDF + OCR (Tesseract retained as fallback for the VLM circuit breaker)
+pdfplumber>=0.11,<1
+pytesseract>=0.3.10,<1
+pdf2image>=1.17,<2
+# Vision pipeline (image preparation; pdf2image already pulls Pillow but we
+# pin it explicitly because the worker manipulates raw images directly).
+Pillow>=10.0,<13
+
+# Additional file formats
+python-docx>=1.1,<2
+openpyxl>=3.1,<4
+beautifulsoup4>=4.12,<5
+markdown>=3.6,<4
+
+# Tokenization (chunker)
+tiktoken>=0.7,<1
+
+# Embeddings + Vector DB
+pymilvus>=2.4,<3
+
+# Database
+sqlalchemy[asyncio]>=2.0,<3
+asyncpg>=0.29,<1
+psycopg2-binary>=2.9,<3
+
+# Task Queue
+celery[redis]>=5.4,<6
+redis>=5.0,<6
+
+# Object Storage
+minio>=7.2,<8
+
+# LLM (OpenAI-compatible client)
+openai>=1.35,<2
+
+# Automation configs
+pyyaml>=6.0,<7
+
+# HTTP client (embedder, healthchecks)
+httpx>=0.27,<1
+
+# Observability
+structlog>=24.4,<25

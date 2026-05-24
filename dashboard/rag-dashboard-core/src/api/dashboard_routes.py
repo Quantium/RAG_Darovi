@@ -1,0 +1,368 @@
+"""Dashboard control panel API — pipeline metrics and destructive re-run triggers."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import httpx
+import structlog
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config.settings import Settings
+from src.api.app import verify_api_key
+from src.api.dashboard_schemas import DashboardActionResult, DashboardCardCounts, DashboardState, InFlightFile
+from src.dashboard.processing_probe import ProcessingProbe
+from src.ingest.source_counter import SourceCounter
+from src.metadata.repository import MetadataRepository
+from src.rag.conversation import count_active_chat_sessions
+from src.storage.backend import MinIOStorage
+
+logger = structlog.get_logger()
+
+dashboard_router = APIRouter(tags=["dashboard"])
+
+CONFIRM_HEADER = "X-Dashboard-Confirm"
+
+
+def _require_dashboard_confirm(request: Request) -> None:
+    val = request.headers.get(CONFIRM_HEADER, "").strip().lower()
+    if val != "yes":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Destructive action requires header {CONFIRM_HEADER}: yes",
+        )
+
+
+@dashboard_router.get(
+    "/dashboard/state",
+    response_model=DashboardState,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_state(request: Request) -> DashboardState:
+    settings: Settings = request.app.state.settings
+    storage = MinIOStorage(settings)
+    raw_bucket = settings.minio_bucket_raw
+    text_bucket = settings.minio_bucket_text
+
+    minio_raw_total = storage.count_objects(raw_bucket)
+    minio_text_total = storage.count_objects(text_bucket)
+
+    source_total, source_url = SourceCounter(settings).count()
+
+    redis_client = request.app.state.redis_cache
+    sessions_legacy, sessions_chatbot = count_active_chat_sessions(redis_client)
+
+    probe = ProcessingProbe(settings)
+    celery_ingest, celery_vector = probe.celery_flags()
+
+    async with AsyncSession(request.app.state.engine) as session:
+        repo = MetadataRepository(session)
+        pg = await repo.get_dashboard_counts()
+        inflight = await repo.get_inflight_files()
+        extract_lock = await probe.advisory_extract_lock_held(session)
+        recent_raw = await probe.max_raw_synced_recent(session)
+
+    milvus_vectors = request.app.state.vector_store.count_entities()
+
+    postgres_total = pg["postgres_total"]
+    source_n = source_total if source_total is not None else postgres_total
+    postgres_missing = max(0, source_n - postgres_total)
+
+    ingest_processing = celery_ingest or recent_raw
+    transform_processing = extract_lock or pg["text_processing_now"] > 0 or pg["vision_processing_files"] > 0
+    vectorize_processing = celery_vector
+
+    cards = DashboardCardCounts(
+        source_total=source_total,
+        minio_raw_total=minio_raw_total,
+        minio_text_total=minio_text_total,
+        raw_pending=pg["raw_pending"],
+        raw_synced=pg["raw_synced"],
+        transform_total=pg["transform_total"],
+        transform_done=pg["transform_done"],
+        text_ready=pg["text_ready"],
+        text_pending=pg["text_pending"],
+        text_failed=pg["text_failed"],
+        text_processing_now=pg["text_processing_now"],
+        postgres_total=postgres_total,
+        postgres_missing=postgres_missing,
+        postgres_to_reprocess=pg["postgres_to_reprocess"],
+        milvus_vectors=milvus_vectors,
+        milvus_files_vectorized=pg["milvus_files_vectorized"],
+        milvus_pending_files=pg["milvus_pending_files"],
+        vision_pending_files=pg["vision_pending_files"],
+        vision_processing_files=pg["vision_processing_files"],
+        sessions_legacy=sessions_legacy,
+        sessions_chatbot_v2=sessions_chatbot,
+    )
+
+    transform_inf = inflight.get("transform")
+    milvus_inf = inflight.get("milvus")
+
+    transform_inflight_file = (
+        InFlightFile(
+            name=transform_inf["name"],
+            drive_file_id=transform_inf["drive_file_id"],
+            minio_key=transform_inf.get("minio_raw_key") or "",
+            minio_bucket=settings.minio_bucket_raw,
+        )
+        if transform_inf
+        else None
+    )
+    milvus_inflight_file = (
+        InFlightFile(
+            name=milvus_inf["name"],
+            drive_file_id=milvus_inf["drive_file_id"],
+            minio_key=milvus_inf.get("minio_text_key") or "",
+            minio_bucket=settings.minio_bucket_text,
+        )
+        if milvus_inf
+        else None
+    )
+
+    return DashboardState(
+        cards=cards,
+        source_url=source_url,
+        ingest_processing=ingest_processing,
+        transform_processing=transform_processing,
+        vectorize_processing=vectorize_processing,
+        transform_inflight_file=transform_inflight_file,
+        milvus_inflight_file=milvus_inflight_file,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+async def _reset_all_raw_stage(session: AsyncSession) -> None:
+    await session.execute(
+        text(
+            """
+            UPDATE file_records SET
+                raw_status = 'pending',
+                raw_checksum = NULL,
+                raw_source_version = NULL,
+                raw_synced_at = NULL,
+                minio_raw_key = NULL,
+                text_status = 'pending',
+                text_source_checksum = NULL,
+                text_checksum = NULL,
+                text_extracted_at = NULL,
+                minio_text_key = NULL,
+                text_error = NULL,
+                status = 'pending',
+                chunk_count = 0,
+                last_processed_at = NULL,
+                error_message = NULL
+            """
+        )
+    )
+    await session.commit()
+
+
+@dashboard_router.post(
+    "/dashboard/re-ingest",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
+)
+async def dashboard_re_ingest(request: Request) -> DashboardActionResult:
+    settings: Settings = request.app.state.settings
+    storage = MinIOStorage(settings)
+    n = storage.remove_all_objects(settings.minio_bucket_raw)
+
+    async with AsyncSession(request.app.state.engine) as session:
+        await _reset_all_raw_stage(session)
+
+    from src.worker.tasks import run_incremental_sync
+
+    job = run_incremental_sync.delay()
+    job_ids = [str(job.id)] if job and job.id else []
+
+    trigger_ok = False
+    base = (settings.ingest_raw_trigger_url or "").strip()
+    if base:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(f"{base.rstrip('/')}/trigger/run")
+                trigger_ok = r.is_success
+        except Exception as exc:
+            logger.warning("dashboard.re_ingest_trigger_failed", error=str(exc))
+
+    detail = f"Cleared {n} RAW object(s); queued incremental sync."
+    if base:
+        detail += " Ingest-raw trigger: " + ("ok" if trigger_ok else "failed or unreachable")
+
+    return DashboardActionResult(status="queued", detail=detail, job_ids=job_ids)
+
+
+async def _reset_text_for_raw_synced(session: AsyncSession) -> None:
+    await session.execute(
+        text(
+            """
+            UPDATE file_records SET
+                text_status = 'pending',
+                text_source_checksum = NULL,
+                text_checksum = NULL,
+                text_extracted_at = NULL,
+                minio_text_key = NULL,
+                text_error = NULL,
+                status = 'downloaded',
+                chunk_count = 0,
+                last_processed_at = NULL
+            WHERE raw_status = 'synced'
+            """
+        )
+    )
+    await session.commit()
+
+
+@dashboard_router.post(
+    "/dashboard/trigger-transform",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_trigger_transform(request: Request) -> DashboardActionResult:
+    """Fire the extract-text service without clearing any data."""
+    settings: Settings = request.app.state.settings
+    base = (settings.extract_text_trigger_url or "").strip()
+    if not base:
+        return DashboardActionResult(status="skipped", detail="EXTRACT_TEXT_TRIGGER_URL not configured.", job_ids=[])
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{base.rstrip('/')}/trigger/run")
+            r.raise_for_status()
+            payload = r.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"extract-text trigger failed: {exc}") from exc
+
+    detail = f"Triggered. Result: {payload}"
+    return DashboardActionResult(status="ok", detail=detail, job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/re-transform",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
+)
+async def dashboard_re_transform(request: Request) -> DashboardActionResult:
+    settings: Settings = request.app.state.settings
+    storage = MinIOStorage(settings)
+    n = storage.remove_all_objects(settings.minio_bucket_text)
+
+    async with AsyncSession(request.app.state.engine) as session:
+        await _reset_text_for_raw_synced(session)
+
+    trigger_ok = False
+    base = (settings.extract_text_trigger_url or "").strip()
+    if base:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(f"{base.rstrip('/')}/trigger/run")
+                trigger_ok = r.is_success
+        except Exception as exc:
+            logger.warning("dashboard.re_transform_trigger_failed", error=str(exc))
+
+    detail = f"Cleared {n} TEXT object(s); reset text stage for raw-synced rows."
+    if base:
+        detail += " Extract-text trigger: " + ("ok" if trigger_ok else "failed or unreachable")
+
+    return DashboardActionResult(status="queued", detail=detail, job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/re-vectorize",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
+)
+async def dashboard_re_vectorize(request: Request) -> DashboardActionResult:
+    from src.worker.tasks import restart_vectorization
+
+    job = restart_vectorization.delay()
+    job_ids = [str(job.id)] if job and job.id else []
+    return DashboardActionResult(
+        status="queued",
+        detail="Vector collection reset and embedding poll queued (Celery).",
+        job_ids=job_ids,
+    )
+
+
+@dashboard_router.post(
+    "/dashboard/clear-data",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
+)
+async def dashboard_clear_data(request: Request) -> DashboardActionResult:
+    """Clear Redis conversation/cache keys and drop all Milvus vectors."""
+    redis_client = request.app.state.redis_cache
+
+    deleted_redis = 0
+    for pattern in ("conv:*", "chatbot:conv:*", "ra-retrieval:*"):
+        keys = list(redis_client.scan_iter(match=pattern, count=500))
+        if keys:
+            deleted_redis += redis_client.delete(*keys)
+
+    vector_store = request.app.state.vector_store
+    deleted_vectors = vector_store.count_entities()
+    vector_store.drop_collection_if_exists()
+    vector_store.ensure_collection()
+
+    logger.info("dashboard.clear_data", deleted_redis=deleted_redis, deleted_vectors=deleted_vectors)
+    return DashboardActionResult(
+        status="ok",
+        detail=f"Cleared {deleted_redis} Redis keys and {deleted_vectors} Milvus vectors.",
+        job_ids=[],
+    )
+
+
+@dashboard_router.post(
+    "/dashboard/erase-all",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
+)
+async def dashboard_erase_all(request: Request) -> DashboardActionResult:
+    """Delete everything: Postgres records, MinIO objects, Milvus vectors, Redis keys."""
+    settings: Settings = request.app.state.settings
+
+    # Redis
+    redis_client = request.app.state.redis_cache
+    deleted_redis = 0
+    for pattern in ("conv:*", "chatbot:conv:*", "ra-retrieval:*"):
+        keys = list(redis_client.scan_iter(match=pattern, count=500))
+        if keys:
+            deleted_redis += redis_client.delete(*keys)
+
+    # Milvus
+    vector_store = request.app.state.vector_store
+    deleted_vectors = vector_store.count_entities()
+    vector_store.drop_collection_if_exists()
+    vector_store.ensure_collection()
+
+    # MinIO
+    storage = MinIOStorage(settings)
+    raw_cleared = storage.remove_all_objects(settings.minio_bucket_raw)
+    text_cleared = storage.remove_all_objects(settings.minio_bucket_text)
+
+    # Postgres — delete all file records (extracted_documents cascades) and sync state
+    async with AsyncSession(request.app.state.engine) as session:
+        await session.execute(text("DELETE FROM extracted_documents"))
+        result = await session.execute(text("DELETE FROM file_records"))
+        deleted_rows = result.rowcount
+        await session.execute(text("DELETE FROM sync_state"))
+        await session.commit()
+
+    logger.info(
+        "dashboard.erase_all",
+        deleted_redis=deleted_redis,
+        deleted_vectors=deleted_vectors,
+        raw_cleared=raw_cleared,
+        text_cleared=text_cleared,
+        deleted_rows=deleted_rows,
+    )
+    return DashboardActionResult(
+        status="ok",
+        detail=(
+            f"Erased {deleted_rows} Postgres rows, {raw_cleared} RAW + {text_cleared} TEXT MinIO objects, "
+            f"{deleted_vectors} Milvus vectors, {deleted_redis} Redis keys."
+        ),
+        job_ids=[],
+    )

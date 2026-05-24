@@ -1,0 +1,16 @@
+{
+  "name": "rag-darovi-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mock-server": "node server/mock-backend.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "ws": "^8.18.0"
+  }
+}

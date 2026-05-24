@@ -1,0 +1,50 @@
+{
+  "pdf_path": "/workspace/samples/C-010.000.1345.00_GMP_BIORESEARCH.pdf",
+  "tesseract_version": "5.5.0",
+  "pages": [
+    {
+      "page": 1,
+      "pdfplumber_metrics": {
+        "chars": 23,
+        "non_ws": 12,
+        "alpha_ratio": 1.0,
+        "unique_ratio": 0.75,
+        "line_count": 12
+      },
+      "ocr_metrics": {
+        "chars": 5190,
+        "non_ws": 4331,
+        "alpha_ratio": 0.8744,
+        "unique_ratio": 0.0199,
+        "line_count": 90
+      },
+      "tables_count": 0,
+      "fallback_gate": false,
+      "pdfplumber_preview": "L\nA\nI\nC\nN\nE\nD\nI\nF\nN\nO\nC",
+      "ocr_preview": "(SERS? secrutania pe saLup a\"\n\n@ COFEPRIS\n\nESTADOS UNIDOS MEXICANOS\nCOMISION FEDERAL PARA LA PROTECCION CONTRA RLESGOS SANITARIOS\n\nCOMISION DE AUTORIZACION SANITARIA\nSUBDIRECCION EJECUTIVA DE LICENCIA",
+      "ocr_error": null
+    },
+    {
+      "page": 2,
+      "pdfplumber_metrics": {
+        "chars": 23,
+        "non_ws": 12,
+        "alpha_ratio": 1.0,
+        "unique_ratio": 0.75,
+        "line_count": 12
+      },
+      "ocr_metrics": {
+        "chars": 2544,
+        "non_ws": 2141,
+        "alpha_ratio": 0.9057,
+        "unique_ratio": 0.0336,
+        "line_count": 81
+      },
+      "tables_count": 0,
+      "fallback_gate": false,
+      "pdfplumber_preview": "L\nA\nI\nC\nN\nE\nD\nI\nF\nN\nO\nC",
+      "ocr_preview": "SALUD e COFEPRIS\n\nSECRETARIA DE SALUD COMISION FEDERAL PARA LA PROTECCION\nQe = sitresiescos Saniranios\n\nESTADOS UNIDOS MEXICANOS\n\nCOMISION FEDERAL PARA LA PROTECCION CONTRA RIESGOS SANITARIOS\nCOMISION",
+      "ocr_error": null
+    }
+  ]
+}

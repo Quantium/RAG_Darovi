@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+
+# Environment
+.env
+
+# Credentials
+credentials/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local TLS
+certs/*.pem
+
+# Local SQLite test artifacts
+test.db
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Darovi</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div id="app">
+        <section id="onboarding-panel" class="onboarding-panel">
+            <div class="onboarding-card">
+                <h2 class="onboarding-title">Set up Google Drive</h2>
+                <p id="onboarding-message" class="onboarding-message">Loading…</p>
+                <div id="onboarding-actions"></div>
+                <ul id="folder-list" class="folder-list" hidden></ul>
+                <div id="onboarding-progress" class="onboarding-progress" hidden>
+                    <div class="onboarding-progress__spinner" aria-hidden="true"></div>
+                    <p id="onboarding-progress-label" class="onboarding-progress__label"></p>
+                </div>
+            </div>
+        </section>
+
+        <div id="chat-shell" hidden>
+        <header>
+            <div class="header-content">
+                <h1>RAG Darovi</h1>
+                <div id="status-container">
+                    <div id="status-indicator" title="Pipeline status"></div>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
+            </div>
+        </header>
+
+        <nav class="view-tabs" aria-label="Main views">
+            <button id="tab-dashboard" class="view-tab active" type="button">Dashboard</button>
+            <button id="tab-document-status" class="view-tab" type="button">Document status</button>
+            <button id="tab-raw-data" class="view-tab" type="button">RAW Data</button>
+        </nav>
+
+        <section id="dashboard-panel" class="dashboard-panel main-layout">
+            <div class="dashboard-cards" id="dashboard-cards">
+                <article class="dash-card" id="dash-card-raw">
+                    <span class="card-file-icon" id="file-icon-raw">📄</span>
+                    <h2>RAW</h2>
+                    <p class="dash-card-desc">Source vs MinIO RAW bucket</p>
+                    <div class="dash-metrics" id="dash-metrics-raw"></div>
+                    <p class="dash-source"><a id="dash-source-url" href="#" target="_blank" rel="noopener">Source</a></p>
+                    <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-ingest"></span><span id="label-ingest">Idle</span></div>
+                    <button type="button" class="danger btn-re-ingest">Re-ingest</button>
+                </article>
+                <article class="dash-card" id="dash-card-transform">
+                    <span class="card-file-icon" id="file-icon-transform">📄</span>
+                    <h2>Transforming</h2>
+                    <p class="dash-card-desc">Text extraction (extract_text)</p>
+                    <div class="dash-metrics" id="dash-metrics-transform"></div>
+                    <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-transform"></span><span id="label-transform">Idle</span></div>
+                    <button type="button" class="btn-run-transform">Run now</button>
+                    <button type="button" class="danger btn-re-transform">Re-transform</button>
+                </article>
+                <article class="dash-card" id="dash-card-postgres">
+                    <span class="card-file-icon">📄</span>
+                    <h2>Postgres</h2>
+                    <p class="dash-card-desc">file_records</p>
+                    <div class="dash-metrics" id="dash-metrics-postgres"></div>
+                    <button type="button" class="danger btn-clear-data">Clear data</button>
+                    <button type="button" class="danger btn-erase-all">Erase all</button>
+                </article>
+                <article class="dash-card" id="dash-card-milvus">
+                    <span class="card-file-icon" id="file-icon-milvus">📄</span>
+                    <h2>Milvus</h2>
+                    <p class="dash-card-desc">Vector index</p>
+                    <div class="dash-metrics" id="dash-metrics-milvus"></div>
+                    <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-vectorize"></span><span id="label-vectorize">Idle</span></div>
+                    <button type="button" class="danger btn-re-vectorize">Re-vectorize</button>
+                </article>
+                <article class="dash-card" id="dash-card-sessions">
+                    <span class="card-file-icon">📄</span>
+                    <h2>Chat sessions</h2>
+                    <p class="dash-card-desc">Active Redis conversation keys</p>
+                    <div class="dash-metrics" id="dash-metrics-sessions"></div>
+                </article>
+            </div>
+            <p class="dashboard-updated" id="dashboard-updated"></p>
+        </section>
+
+        <section id="document-status-panel" class="document-status-panel" hidden>
+            <div class="document-status-header">
+                <h2>OCR extraction status</h2>
+                <div class="document-status-header-actions">
+                    <button id="ingest-btn" type="button">Ingest</button>
+                    <button id="restart-ingest-btn" class="danger-btn" type="button">Reiniciar Ingesta</button>
+                    <div id="document-status-filters" class="document-status-filters" role="group" aria-label="Document status filters">
+                        <button type="button" class="document-status-filter active" data-filter="all">All</button>
+                        <button type="button" class="document-status-filter" data-filter="raw-text-missing">Raw text missing</button>
+                    </div>
+                    <button id="refresh-document-status" type="button">Refresh</button>
+                </div>
+            </div>
+            <div id="ingest-status" class="ingest-status" hidden>
+                <span class="ingest-status__spinner" aria-hidden="true"></span>
+                <div class="ingest-status__content">
+                    <p id="ingest-status-label">Ingestion in progress...</p>
+                    <p id="ingest-status-current-file" class="ingest-status__current-file"></p>
+                </div>
+            </div>
+            <p id="document-status-empty" class="document-status-empty" hidden>No documents found yet.</p>
+            <div class="document-status-table-wrapper">
+                <table id="document-status-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable-th" data-sort-key="name" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Document</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="mime_type" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Type</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="status" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Pipeline status</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="extraction" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">OCR extraction</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="raw_text" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Raw text available</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="chunks" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Chunks</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="last_processed" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Last processed</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="error" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Error</button>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="table-pagination" id="document-status-pagination">
+                <label class="table-pagination__size">
+                    Rows per page
+                    <select id="document-status-page-size" aria-label="Document status rows per page">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="100">100</option>
+                        <option value="all">All</option>
+                    </select>
+                </label>
+                <span class="table-pagination__info" id="document-status-page-info"></span>
+                <div class="table-pagination__nav">
+                    <button type="button" id="document-status-prev" disabled>Previous</button>
+                    <button type="button" id="document-status-next" disabled>Next</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="raw-data-panel" class="document-status-panel" hidden>
+            <div class="document-status-header">
+                <h2>Extracted RAW Data</h2>
+                <button id="refresh-raw-data" type="button">Refresh</button>
+            </div>
+            <p id="raw-data-empty" class="document-status-empty" hidden>No extracted data found yet.</p>
+            <div class="document-status-table-wrapper">
+                <table id="raw-data-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable-th" data-sort-key="name" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Document</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="mime_type" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Type</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="status" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Pipeline status</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="last_processed" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Last processed</button>
+                            </th>
+                            <th class="sortable-th" data-sort-key="extracted_text" scope="col" aria-sort="none">
+                                <button type="button" class="th-sort-btn">Extracted text</button>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="table-pagination" id="raw-data-pagination">
+                <label class="table-pagination__size">
+                    Rows per page
+                    <select id="raw-data-page-size" aria-label="RAW data rows per page">
+                        <option value="10">10</option>
+                        <option value="25" selected>25</option>
+                        <option value="100">100</option>
+                        <option value="all">All</option>
+                    </select>
+                </label>
+                <span class="table-pagination__info" id="raw-data-page-info"></span>
+                <div class="table-pagination__nav">
+                    <button type="button" id="raw-data-prev" disabled>Previous</button>
+                    <button type="button" id="raw-data-next" disabled>Next</button>
+                </div>
+            </div>
+        </section>
+        </div>
+    </div>
+    <script src="/app.js"></script>
+</body>
+</html>

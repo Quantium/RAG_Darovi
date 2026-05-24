@@ -1,0 +1,79 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  background: #f0f2f5;
+}
+
+.container {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.messages {
+  min-height: 360px;
+  max-height: 55vh;
+  overflow: auto;
+  border: 1px solid #c9d3df;
+  background: white;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.msg {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.msg.user {
+  background: #dceeff;
+}
+
+.msg.assistant {
+  background: #eef3f8;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+input {
+  flex: 1;
+  padding: 10px;
+}
+
+button {
+  padding: 10px 14px;
+}
+
+#sources table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+
+#sources th,
+#sources td {
+  border: 1px solid #c9d3df;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+#sources th {
+  background: #dce6f0;
+}
+
+#sources td:nth-child(3) {
+  white-space: nowrap;
+}
+
+.msg.assistant p { margin: 0 0 6px; }
+.msg.assistant ul,
+.msg.assistant ol { margin: 4px 0 4px 18px; padding: 0; }
+.msg.assistant code { background: #dce6f0; border-radius: 3px; padding: 0 3px; font-size: 0.9em; }
+.msg.assistant pre { background: #101820; color: #d8e2ee; border-radius: 6px; padding: 8px; overflow-x: auto; }

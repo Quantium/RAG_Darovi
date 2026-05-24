@@ -1,0 +1,18 @@
+# Dashboard control panel — HTTP contract (legacy app-api)
+
+endpoints:
+  - method: GET
+    path: /dashboard/state
+    response_model: DashboardState
+  - method: POST
+    path: /dashboard/re-ingest
+    headers:
+      X-Dashboard-Confirm: "yes"
+  - method: POST
+    path: /dashboard/re-transform
+    headers:
+      X-Dashboard-Confirm: "yes"
+  - method: POST
+    path: /dashboard/re-vectorize
+    headers:
+      X-Dashboard-Confirm: "yes"

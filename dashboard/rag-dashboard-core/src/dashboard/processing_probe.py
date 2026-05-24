@@ -1,0 +1,94 @@
+"""Best-effort detection of background pipeline activity (Celery + Postgres)."""
+
+from __future__ import annotations
+
+import structlog
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from config.settings import Settings
+
+logger = structlog.get_logger()
+
+_INGEST_NAMES = frozenset(
+    {
+        "src.worker.tasks.run_incremental_sync",
+        "src.worker.tasks.restart_ingest",
+        "src.worker.tasks.download_file",
+    }
+)
+_VECTOR_NAMES = frozenset(
+    {
+        "src.worker.tasks.embed_file",
+        "src.worker.tasks.poll_text_ready_for_embedding",
+        "src.worker.tasks.vision_extract",
+    }
+)
+
+
+class ProcessingProbe:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def celery_flags(self) -> tuple[bool, bool]:
+        """Return (ingest_busy, vectorize_busy). Transform uses DB + advisory lock separately."""
+        try:
+            from src.worker.celery_app import app as celery_app
+
+            inspect = celery_app.control.inspect(timeout=1.0)
+            if not inspect:
+                return False, False
+            active = inspect.active() or {}
+            ingest = False
+            vector = False
+            for _worker, tasks in active.items():
+                for t in tasks or []:
+                    name = (t or {}).get("name") or ""
+                    if name in _INGEST_NAMES:
+                        ingest = True
+                    if name in _VECTOR_NAMES or "embed" in name:
+                        vector = True
+            return ingest, vector
+        except Exception as exc:
+            logger.warning("dashboard.celery_inspect_failed", error=str(exc))
+            return False, False
+
+    async def max_raw_synced_recent(self, session: AsyncSession, seconds: int = 120) -> bool:
+        """Heuristic: raw ingest touched rows in the last `seconds` (Postgres)."""
+        try:
+            result = await session.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1 FROM file_records
+                      WHERE raw_synced_at IS NOT NULL
+                        AND raw_synced_at > NOW() - (INTERVAL '1 second' * :sec)
+                    )
+                    """
+                ),
+                {"sec": seconds},
+            )
+            return bool(result.scalar())
+        except Exception as exc:
+            logger.warning("dashboard.recent_raw_query_failed", error=str(exc))
+            return False
+
+    async def advisory_extract_lock_held(self, session: AsyncSession) -> bool:
+        try:
+            lock_id = int(self._settings.extract_text_lock_id)
+            result = await session.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                      SELECT 1 FROM pg_locks
+                      WHERE locktype = 'advisory'
+                        AND ((classid::bigint << 32) | objid::bigint) = :lock_id
+                    )
+                    """
+                ),
+                {"lock_id": lock_id},
+            )
+            return bool(result.scalar())
+        except Exception:
+            # e.g. SQLite test DB — no pg_locks
+            return False

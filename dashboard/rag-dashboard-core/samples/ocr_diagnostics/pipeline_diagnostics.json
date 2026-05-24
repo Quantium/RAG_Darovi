@@ -1,0 +1,23 @@
+{
+  "drive_file_id": "ocr-diagnostic-sample-001",
+  "convert_task_result": {
+    "drive_file_id": "ocr-diagnostic-sample-001",
+    "minio_text_key": "ocr-diagnostic-sample-001.txt",
+    "name": "C-010.000.1345.00_GMP_BIORESEARCH.pdf",
+    "document_type": "pdf"
+  },
+  "legacy_stats": {
+    "chars": 80,
+    "non_ws": 46,
+    "alpha_ratio": 0.6957,
+    "line_count": 29
+  },
+  "pipeline_stats": {
+    "chars": 80,
+    "non_ws": 46,
+    "alpha_ratio": 0.6957,
+    "line_count": 29
+  },
+  "outputs_match_exactly": true,
+  "pipeline_preview": "--- PAGE 1 ---\n\nL\nA\nI\nC\nN\nE\nD\nI\nF\nN\nO\nC\n\n--- PAGE 2 ---\n\nL\nA\nI\nC\nN\nE\nD\nI\nF\nN\nO\nC"
+}
