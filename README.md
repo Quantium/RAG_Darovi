@@ -4,6 +4,12 @@ This repository is the **local orchestrator** for the RAG Darovi platform. It do
 
 For the second cleanup history and rationale, see [docs/repo-split/REPO_SPLIT_MAP.md](docs/repo-split/REPO_SPLIT_MAP.md) and [docs/repo-split/VERIFICATION_GATES.md](docs/repo-split/VERIFICATION_GATES.md).
 
+## About the project
+
+Darovi is a corporation that serves medicines and health assets through their CEDIS (Centros de Distribución) across the country (México). Their main clients are government dependencies so their contracts are based on strong regulatory conditions which need to fit into health and goverment vendor compliance. The documentation for each contract is huge and is conformed by images and pdfs. The majority of the images are the photos of the packages of the medicines and assets and a lot of pdfs are just scanned documents with seals and signatures diffucult to identify for a common OCR. 
+
+This project intents to solve the hard work of deep into the documents in order to get information out of it using deep vision, RAG and chatbot LLM. We plan, for a second stage of the project, connect this with the ERP.
+
 ## Repositories at a glance
 
 - `services/ingest_raw` -> [Quantium/rag-service-ingest-raw](https://github.com/Quantium/rag-service-ingest-raw)
