@@ -48,3 +48,6 @@ httpx>=0.27,<1
 
 # Observability
 structlog>=24.4,<25
+
+# Parquet export/import (backup/restore scripts)
+pyarrow>=16.0,<19
