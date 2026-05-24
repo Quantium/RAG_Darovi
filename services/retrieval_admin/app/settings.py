@@ -28,4 +28,8 @@ class Settings(BaseSettings):
     embed_api_key: SecretStr = SecretStr("")
     embed_model: str = "text-embedding-3-large"
 
+    llm_api_key: SecretStr = SecretStr("")
+    llm_model: str = "deepseek-chat"
+    llm_base_url: str = "https://api.deepseek.com/v1/"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
