@@ -62,7 +62,7 @@ contracts --> dashboard
 
 - Docker Engine and Docker Compose v2 (`docker compose`).
 - Git (with submodule support).
-- Roughly 10 GB free disk for images, volumes and Ollama models.
+- Roughly 6 GB free disk for images and volumes.
 - OpenSSL if you generate local TLS certificates.
 - Python 3.11+ only if you want to run service test gates locally; each repo bootstraps its own venv.
 
@@ -119,8 +119,6 @@ Published host ports:
 | 6379 | Redis |
 | 9000, 9001 | MinIO API and console |
 | 19530 | Milvus |
-| 11435 | Ollama |
-| 11436 | Ollama Vision |
 
 ## Container architecture
 
@@ -179,12 +177,11 @@ graph TB
         subgraph etcd["milvus-etcd"]
             ET2["etcd\nMilvus metadata store"]
         end
-        subgraph ol["ollama :11435"]
-            OL1["Ollama\nEmbed model (nomic-embed-text)\nChat LLM (qwen3.5:9b)"]
-        end
-        subgraph olv["ollama-vision :11436"]
-            OV1["Ollama Vision\nllama3.2-vision:11b\nOCR + KV extraction"]
-        end
+    end
+
+    subgraph externalApis["External APIs"]
+        OAI["OpenAI\nEmbeddings (text-embedding-3-large)\nVision OCR (gpt-4o)"]
+        DS["DeepSeek\nChat LLM (deepseek-chat)"]
     end
 
     browser -->|HTTPS :8000| appApi
@@ -208,19 +205,19 @@ graph TB
 
     appWorker -->|download/upload| mn
     appWorker -->|update file_records| pg
-    appWorker -->|embed via| ol
+    appWorker -->|embed via| OAI
     appWorker -->|upsert vectors| mv
 
     appWorkerVision -->|download raw+text| mn
-    appWorkerVision -->|OCR via| olv
+    appWorkerVision -->|OCR via| OAI
     appWorkerVision -->|update file_records| pg
 
-    retrievalAdmin -->|embed query| ol
+    retrievalAdmin -->|embed query| OAI
     retrievalAdmin -->|search vectors| mv
     retrievalAdmin -->|cache| rd
 
     chatbotResponse -->|retrieve context| retrievalAdmin
-    chatbotResponse -->|LLM completion| ol
+    chatbotResponse -->|LLM completion| DS
     chatbotResponse -->|conversation store| rd
 
     mv --- etcd
@@ -235,17 +232,15 @@ graph TB
 | **dashboard-worker** | `dashboard/rag-dashboard-core` | Async pipeline worker | `download_file`, `convert_file`, `embed_file`, `poll_text_ready_for_embedding`, `poll_vision_pending`, `run_incremental_sync` Celery tasks |
 | **dashboard-worker-vision** | `dashboard/rag-dashboard-core` | Dedicated OCR worker | `vision_extract` Celery task (concurrency 1, owns the `vision` queue) |
 | **dashboard-beat** | `dashboard/rag-dashboard-core` | Celery Beat scheduler | Fires `poll_text_ready_for_embedding` and `poll_vision_pending` on a configurable interval |
-| **ingest-raw-service** | `services/ingest_raw` | Ingestion microservice | Polls local folder or Google Drive; uploads binaries to MinIO `raw-files`; writes `file_records` |
+| **ingest-raw-service** | `services/ingest_raw` | Ingestion microservice | Polls local folder; uploads binaries to MinIO `raw-files`; writes `file_records` |
 | **extract-text-service** | `services/extract_text` | Text extraction microservice | Reads MinIO RAW; runs pdfplumber / docx / xlsx extractors with per-page quality check; emits vision sentinels for scanned pages; writes to MinIO `converted-texts` |
-| **retrieval-admin-service** | `services/retrieval_admin` | Retrieval API | Embeds queries via Ollama, searches Milvus, caches results in Redis |
-| **chatbot-response-service** | `services/chatbot_response` | Chat API | REST + WebSocket chat; stores conversation history in Redis; calls retrieval-admin; calls Ollama LLM |
+| **retrieval-admin-service** | `services/retrieval_admin` | Retrieval API | Embeds queries via OpenAI, searches Milvus, caches results in Redis |
+| **chatbot-response-service** | `services/chatbot_response` | Chat API | REST + WebSocket chat; stores conversation history in Redis; calls retrieval-admin; calls DeepSeek LLM |
 | **postgres** | `postgres:16-alpine` | Relational metadata store | `file_records`, `sync_state`, `drive_connection`, `extracted_documents` tables |
 | **redis** | `redis:7-alpine` | Broker + cache + store | DB 0: Celery broker · DB 1: Celery results · DB 2: retrieval cache + conversation history |
 | **minio** | `minio/minio` | Object storage | `raw-files` bucket (original binaries) · `converted-texts` bucket (extracted markdown) |
 | **milvus** | `milvusdb/milvus:v2.4.21` | Vector database | `rag_darovi_docs` collection, HNSW COSINE index, partitions `doc / sheet / pdf` |
 | **milvus-etcd** | `quay.io/coreos/etcd:v3.5.18` | Milvus metadata store | Internal etcd cluster required by Milvus standalone |
-| **ollama** | `ollama/ollama` | Embed + chat LLM | `nomic-embed-text` (embeddings) · `qwen3.5:9b` (chat completions) |
-| **ollama-vision** | `ollama/ollama` | Vision LLM | `llama3.2-vision:11b` (OCR + KV extraction for scanned PDFs) |
 
 Smoke check:
 
@@ -319,14 +314,6 @@ The `dashboard-api` container mounts `./certs:/etc/rag/certs:ro`. The dashboard 
 ### `permission denied` when talking to Docker
 
 Add your user to the `docker` group: `sudo usermod -aG docker "$USER"` and re-login, or prefix commands with `sudo`.
-
-### Port 11434 already in use on the host
-
-Compose maps the Ollama container to host port `11435` so a local Ollama install can keep `11434`. Pull models via the container, for example `docker compose exec ollama ollama pull nomic-embed-text`.
-
-### Drive sync does nothing
-
-Confirm the service account JSON, `DRIVE_FOLDER_ID`, and Drive API enablement. Mount `credentials/` into the relevant container.
 
 ### Where does service code live?
 
