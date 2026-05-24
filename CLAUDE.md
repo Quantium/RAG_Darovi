@@ -10,10 +10,10 @@ This is the **orchestrator** for the RAG Darovi platform. It contains no applica
 
 | Path | Source repo | Responsibility |
 |------|-------------|----------------|
-| `services/ingest_raw` | `Quantium/rag-service-ingest-raw` | Ingestion from local folder or Google Drive → MinIO RAW |
+| `services/ingest_raw` | `Quantium/rag-service-ingest-raw` | Ingestion from local folder → MinIO RAW |
 | `services/extract_text` | `Quantium/rag-service-extract-text` | Text extraction RAW → MinIO TEXT; routes scanned pages to vision |
-| `services/retrieval_admin` | `Quantium/rag-service-retrieval-admin` | Retrieval API: embed query → Milvus search → Redis cache |
-| `services/chatbot_response` | `Quantium/rag-service-chatbot-response` | Chat REST + WebSocket; calls retrieval-admin; Ollama LLM |
+| `services/retrieval_admin` | `Quantium/rag-service-retrieval-admin` | Retrieval API: embed query (OpenAI) → Milvus search → Redis cache |
+| `services/chatbot_response` | `Quantium/rag-service-chatbot-response` | Chat REST + WebSocket; calls retrieval-admin; DeepSeek LLM |
 | `dashboard/rag-dashboard-core` | `Quantium/rag-legacy-core` | FastAPI dashboard + Celery monolith (worker, beat, vision worker) |
 | `schema/rag-schema` | `Quantium/rag-schema` | Shared Alembic migrations |
 | `qa/rag-e2e-contracts` | `Quantium/rag-e2e-contracts` | Cross-service HTTP contracts + Playwright e2e |
@@ -68,18 +68,16 @@ The PostgreSQL `file_records` table drives the entire ingestion pipeline. Key st
 | Port | Container |
 |------|-----------|
 | 8000 | `dashboard-api` (main UI + API) |
-| 8010 | `retrieval-admin-service` |
+| 8010 | `retrieval-admin-service` (REST API only, no frontend) |
 | 8020 | `chatbot-response-service` |
 | 5432 | PostgreSQL |
 | 6379 | Redis |
 | 9000/9001 | MinIO API / console |
 | 19530 | Milvus |
-| 11435 | Ollama (embed + chat; host port avoids conflict with local Ollama at 11434) |
-| 11436 | Ollama Vision (llama3.2-vision:11b, isolated VRAM) |
 
 Redis logical DBs: 0 = Celery broker, 1 = Celery results, 2 = retrieval cache + conversation history.
 
-Two Ollama containers are intentional: `ollama-vision` is isolated so VLM calls cannot evict embedding/chat models from VRAM.
+Inference is handled by external APIs: **OpenAI** for embeddings (`text-embedding-3-large`) and vision (`gpt-4o`); **DeepSeek** for chat LLM.
 
 ## Where to make a change
 
