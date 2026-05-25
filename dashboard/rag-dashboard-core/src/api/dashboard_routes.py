@@ -55,7 +55,7 @@ async def dashboard_state(request: Request) -> DashboardState:
     sessions_legacy, sessions_chatbot = count_active_chat_sessions(redis_client)
 
     probe = ProcessingProbe(settings)
-    celery_ingest, celery_vector = probe.celery_flags()
+    celery_ingest, celery_vector, active_embed_args = probe.celery_flags()
 
     async with AsyncSession(request.app.state.engine) as session:
         repo = MetadataRepository(session)
@@ -99,7 +99,8 @@ async def dashboard_state(request: Request) -> DashboardState:
     )
 
     transform_inf = inflight.get("transform")
-    milvus_inf = inflight.get("milvus")
+    # Prefer the live Celery task args (exact file being embedded) over the DB snapshot
+    milvus_inf = active_embed_args or inflight.get("milvus")
 
     transform_inflight_file = (
         InFlightFile(

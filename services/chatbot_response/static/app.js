@@ -1,10 +1,86 @@
-const form = document.getElementById("chat-form");
-const input = document.getElementById("query-input");
-const messages = document.getElementById("messages");
-const sourcesEl = document.getElementById("sources");
+// ── Auth state ────────────────────────────────────────────────────────────────
+const TOKEN_KEY = "chatbot_token";
+
+function getToken() { return localStorage.getItem(TOKEN_KEY); }
+function saveToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const loginSection = document.getElementById("login-section");
+const chatSection  = document.getElementById("chat-section");
+const loginForm    = document.getElementById("login-form");
+const loginError   = document.getElementById("login-error");
+const logoutBtn    = document.getElementById("logout-btn");
+const form         = document.getElementById("chat-form");
+const input        = document.getElementById("query-input");
+const messages     = document.getElementById("messages");
+const sourcesEl    = document.getElementById("sources");
 
 let conversationId = null;
 
+// ── Show/hide sections ────────────────────────────────────────────────────────
+function showChat() {
+  loginSection.hidden = true;
+  chatSection.hidden = false;
+}
+
+function showLogin() {
+  loginSection.hidden = false;
+  chatSection.hidden = true;
+}
+
+if (getToken()) {
+  showChat();
+} else {
+  showLogin();
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  loginError.hidden = true;
+  const username = document.getElementById("login-username").value.trim();
+  const password = document.getElementById("login-password").value;
+  try {
+    const res = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      loginError.textContent = data.detail || "Error al iniciar sesión";
+      loginError.hidden = false;
+      return;
+    }
+    const data = await res.json();
+    saveToken(data.token);
+    showChat();
+    loginForm.reset();
+  } catch (err) {
+    loginError.textContent = `Error de red: ${err}`;
+    loginError.hidden = false;
+  }
+});
+
+// ── Logout ────────────────────────────────────────────────────────────────────
+logoutBtn.addEventListener("click", async () => {
+  const token = getToken();
+  clearToken();
+  if (token) {
+    await fetch("/auth/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    }).catch(() => {});
+  }
+  conversationId = null;
+  messages.innerHTML = "";
+  sourcesEl.innerHTML = "";
+  showLogin();
+});
+
+// ── Chat helpers ──────────────────────────────────────────────────────────────
 function addMessage(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
@@ -33,11 +109,12 @@ function renderSources(sources) {
   }).join("");
   sourcesEl.innerHTML = `
     <table>
-      <thead><tr><th>File</th><th>Text Preview</th><th>Score</th></tr></thead>
+      <thead><tr><th>Archivo</th><th>Vista previa</th><th>Score</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
 
+// ── Chat submit ───────────────────────────────────────────────────────────────
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const query = input.value.trim();
@@ -49,18 +126,23 @@ form.addEventListener("submit", async (event) => {
   sourcesEl.innerHTML = "";
 
   try {
-    const response = await fetch("/chat", {
+    const res = await fetch("/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        conversation_id: conversationId
-      })
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ query, conversation_id: conversationId }),
     });
-    if (!response.ok) {
-      throw new Error(`chat ${response.status}`);
+    if (res.status === 401) {
+      clearToken();
+      showLogin();
+      return;
     }
-    const data = await response.json();
+    if (!res.ok) {
+      throw new Error(`chat ${res.status}`);
+    }
+    const data = await res.json();
     conversationId = data.conversation_id;
     assistant.innerHTML = marked.parse(data.answer);
     renderSources(data.sources);

@@ -845,25 +845,17 @@ def poll_text_ready_for_embedding(self):
                 threshold_seconds=stale_threshold,
             )
 
-        for record in repo.list_ready_for_embedding_sync():
-            if not record.minio_text_key:
-                skipped += 1
-                repo.update_text_stage_sync(
-                    record.drive_file_id,
-                    text_status="failed",
-                    text_error="Missing minio_text_key for embedding handoff",
-                )
-                continue
-
+        skipped = repo.batch_fail_missing_text_key_sync()
+        records = repo.batch_mark_embedding_queued_sync()
+        for record in records:
             convert_result = {
-                "drive_file_id": record.drive_file_id,
-                "minio_text_key": record.minio_text_key,
-                "minio_raw_key": record.minio_raw_key or record.drive_file_id,
-                "mime_type": record.mime_type,
-                "name": record.name,
-                "document_type": derive_document_type(record.mime_type),
+                "drive_file_id": record["drive_file_id"],
+                "minio_text_key": record["minio_text_key"],
+                "minio_raw_key": record.get("minio_raw_key") or record["drive_file_id"],
+                "mime_type": record["mime_type"],
+                "name": record["name"],
+                "document_type": derive_document_type(record["mime_type"]),
             }
-            repo.update_text_stage_sync(record.drive_file_id, text_status="embedding_queued", text_error=None)
             dispatch_downstream_pipeline(convert_result, trace_id=trace_id)
             queued += 1
 

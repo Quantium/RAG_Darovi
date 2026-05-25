@@ -30,17 +30,22 @@ class ProcessingProbe:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def celery_flags(self) -> tuple[bool, bool]:
-        """Return (ingest_busy, vectorize_busy). Transform uses DB + advisory lock separately."""
+    def celery_flags(self) -> tuple[bool, bool, dict | None]:
+        """Return (ingest_busy, vectorize_busy, active_embed_args).
+
+        active_embed_args is the args dict of the currently running embed_file task,
+        containing drive_file_id, name, minio_text_key, etc. — or None if not running.
+        """
         try:
             from src.worker.celery_app import app as celery_app
 
             inspect = celery_app.control.inspect(timeout=1.0)
             if not inspect:
-                return False, False
+                return False, False, None
             active = inspect.active() or {}
             ingest = False
             vector = False
+            embed_args: dict | None = None
             for _worker, tasks in active.items():
                 for t in tasks or []:
                     name = (t or {}).get("name") or ""
@@ -48,10 +53,14 @@ class ProcessingProbe:
                         ingest = True
                     if name in _VECTOR_NAMES or "embed" in name:
                         vector = True
-            return ingest, vector
+                    if name == "src.worker.tasks.embed_file" and embed_args is None:
+                        args = t.get("args") or []
+                        if args and isinstance(args[0], dict):
+                            embed_args = args[0]
+            return ingest, vector, embed_args
         except Exception as exc:
             logger.warning("dashboard.celery_inspect_failed", error=str(exc))
-            return False, False
+            return False, False, None
 
     async def max_raw_synced_recent(self, session: AsyncSession, seconds: int = 120) -> bool:
         """Heuristic: raw ingest touched rows in the last `seconds` (Postgres)."""

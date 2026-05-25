@@ -33,4 +33,8 @@ class Settings(BaseSettings):
     retrieval_top_k_default: int = 10
     retrieval_top_k_aggregate: int = 40
 
+    database_url_sync: SecretStr = SecretStr(
+        "postgresql+psycopg2://postgres:postgres@postgres:5432/rag_darovi"
+    )
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

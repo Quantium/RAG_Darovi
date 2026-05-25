@@ -209,6 +209,7 @@ services:
       LLM_API_KEY: ${DEEPSEEK_API_KEY:-}
       LLM_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       LLM_PROVIDER: deepseek
+      DATABASE_URL_SYNC: postgresql+psycopg2://postgres:postgres@postgres:5432/rag_darovi
     ports:
       - "8020:8020"
     depends_on:
@@ -216,6 +217,8 @@ services:
         condition: service_healthy
       retrieval-admin-service:
         condition: service_started
+      postgres:
+        condition: service_healthy
 
   dashboard-worker-vision:
     # Dedicated worker for the VLM stage. concurrency=1 because each VLM

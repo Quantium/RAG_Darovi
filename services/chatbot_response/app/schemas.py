@@ -31,3 +31,17 @@ class RetrieveResponse(BaseModel):
     query: str
     context: str
     sources: list[SourceReference]
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., pattern=r"^[a-z0-9]{1,10}$")
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class LoginResponse(BaseModel):
+    token: str
+    username: str
+
+
+class LogoutRequest(BaseModel):
+    token: str

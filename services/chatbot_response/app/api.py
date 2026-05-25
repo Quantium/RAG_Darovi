@@ -8,10 +8,17 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from .auth import (
+    check_ws_session,
+    create_session,
+    delete_session,
+    require_session,
+    verify_user,
+)
 from .conversation import ConversationStore
 from .llm import LLMService
 from .retrieval_client import RetrievalClient
-from .schemas import ChatRequest, ChatResponse
+from .schemas import ChatRequest, ChatResponse, LoginRequest, LoginResponse, LogoutRequest
 from .settings import Settings
 
 _AGGREGATE_KEYWORDS = (
@@ -46,6 +53,7 @@ def create_app() -> FastAPI:
     settings = Settings()
     redis_client = redis.Redis.from_url(settings.redis_cache_url)
     app.state.settings = settings
+    app.state.redis_client = redis_client
     app.state.retrieval = RetrievalClient(settings)
     app.state.llm = LLMService(settings)
     app.state.conversation = ConversationStore(redis_client, ttl_seconds=settings.conversation_ttl_seconds)
@@ -54,7 +62,25 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
+    @app.post("/auth/login", response_model=LoginResponse)
+    async def login(body: LoginRequest) -> LoginResponse:
+        db_url = settings.database_url_sync.get_secret_value()
+        ok = await verify_user(db_url, body.username, body.password)
+        if not ok:
+            raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+        token = create_session(redis_client, body.username)
+        return LoginResponse(token=token, username=body.username)
+
+    @app.post("/auth/logout")
+    async def logout(body: LogoutRequest) -> dict[str, str]:
+        delete_session(redis_client, body.token)
+        return {"status": "ok"}
+
+    @app.post(
+        "/chat",
+        response_model=ChatResponse,
+        dependencies=[Depends(verify_api_key), Depends(require_session)],
+    )
     async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         retrieval: RetrievalClient = app.state.retrieval
         llm: LLMService = app.state.llm
@@ -77,6 +103,10 @@ def create_app() -> FastAPI:
         if configured and incoming_key != configured:
             await ws.close(code=1008)
             return
+        token = ws.query_params.get("token")
+        if not check_ws_session(redis_client, token):
+            await ws.close(code=1008)
+            return
         await ws.accept()
         retrieval: RetrievalClient = app.state.retrieval
         llm: LLMService = app.state.llm
@@ -95,8 +125,8 @@ def create_app() -> FastAPI:
                 retrieve = await retrieval.retrieve(query=query, top_k=top_k, document_type=doc_type, api_key=incoming_key or None)
                 history = conversation.get_history(conv_id)
                 answer = await llm.answer(query=query, context=retrieve.context, history=history)
-                for token in answer.split():
-                    await ws.send_json({"type": "token", "content": token + " "})
+                for token_word in answer.split():
+                    await ws.send_json({"type": "token", "content": token_word + " "})
                 conversation.append(conv_id, "user", query)
                 conversation.append(conv_id, "assistant", answer)
                 await ws.send_json(

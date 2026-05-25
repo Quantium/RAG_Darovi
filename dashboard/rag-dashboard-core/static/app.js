@@ -573,22 +573,122 @@ async function loadDashboard() {
     }
 }
 
+const tabUsers         = document.getElementById("tab-users");
+const usersPanel       = document.getElementById("users-panel");
+const usersTableBody   = document.getElementById("users-table-body");
+const usersEmpty       = document.getElementById("users-empty");
+const createUserBtn    = document.getElementById("create-user-btn");
+const newUsernameEl    = document.getElementById("new-username");
+const newPasswordEl    = document.getElementById("new-password");
+const usersCreateError = document.getElementById("users-create-error");
+const usersCreateOk    = document.getElementById("users-create-ok");
+const refreshUsersBtn  = document.getElementById("refresh-users-btn");
+
+async function loadUsers() {
+    if (usersEmpty) usersEmpty.hidden = true;
+    if (usersTableBody) usersTableBody.innerHTML = "";
+    const res = await fetch("/users", { headers: apiHeaders() });
+    if (!res.ok) throw new Error(`users ${res.status}`);
+    const users = await res.json();
+    if (users.length === 0) {
+        if (usersEmpty) usersEmpty.hidden = false;
+        return;
+    }
+    users.forEach((u) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${escapeHtml(u.username)}</td>
+            <td><button type="button" class="danger" data-username="${escapeHtml(u.username)}">Borrar</button></td>
+        `;
+        tr.querySelector("button").addEventListener("click", async () => {
+            if (!confirm(`¿Eliminar usuario "${u.username}"?`)) return;
+            const delRes = await fetch(`/users/${encodeURIComponent(u.username)}`, {
+                method: "DELETE",
+                headers: apiHeaders(),
+            });
+            if (!delRes.ok) { alert("Error al eliminar usuario"); return; }
+            await loadUsers();
+        });
+        if (usersTableBody) usersTableBody.appendChild(tr);
+    });
+}
+
+if (createUserBtn) {
+    createUserBtn.addEventListener("click", async () => {
+        if (usersCreateError) usersCreateError.hidden = true;
+        if (usersCreateOk) usersCreateOk.hidden = true;
+        const username = newUsernameEl?.value.trim() || "";
+        const password = newPasswordEl?.value || "";
+        if (!/^[a-z0-9]{1,10}$/.test(username)) {
+            if (usersCreateError) {
+                usersCreateError.textContent = "Usuario inválido: solo letras minúsculas y números, máx 10 caracteres.";
+                usersCreateError.hidden = false;
+            }
+            return;
+        }
+        if (!password) {
+            if (usersCreateError) {
+                usersCreateError.textContent = "La contraseña no puede estar vacía.";
+                usersCreateError.hidden = false;
+            }
+            return;
+        }
+        try {
+            const res = await fetch("/users", {
+                method: "POST",
+                headers: apiHeaders(true),
+                body: JSON.stringify({ username, password }),
+            });
+            if (res.status === 409) {
+                if (usersCreateError) {
+                    usersCreateError.textContent = "El usuario ya existe.";
+                    usersCreateError.hidden = false;
+                }
+                return;
+            }
+            if (!res.ok) throw new Error(await res.text());
+            if (usersCreateOk) {
+                usersCreateOk.textContent = `Usuario "${username}" creado.`;
+                usersCreateOk.hidden = false;
+            }
+            if (newUsernameEl) newUsernameEl.value = "";
+            if (newPasswordEl) newPasswordEl.value = "";
+            await loadUsers();
+        } catch (e) {
+            if (usersCreateError) {
+                usersCreateError.textContent = `Error: ${e.message || String(e)}`;
+                usersCreateError.hidden = false;
+            }
+        }
+    });
+}
+
+refreshUsersBtn?.addEventListener("click", () => {
+    loadUsers().catch((e) => console.error("users refresh", e));
+});
+
 function setActiveTab(nextTab) {
     state.activeTab = nextTab;
     const dashboardIsActive = nextTab === "dashboard";
     const statusIsActive = nextTab === "document-status";
     const rawDataIsActive = nextTab === "raw-data";
+    const usersIsActive = nextTab === "users";
     tabDashboard?.classList.toggle("active", dashboardIsActive);
     tabDocumentStatus?.classList.toggle("active", statusIsActive);
     tabRawData?.classList.toggle("active", rawDataIsActive);
+    tabUsers?.classList.toggle("active", usersIsActive);
     if (dashboardPanel) dashboardPanel.hidden = !dashboardIsActive;
     if (documentStatusPanel) documentStatusPanel.hidden = !statusIsActive;
     if (rawDataPanel) rawDataPanel.hidden = !rawDataIsActive;
+    if (usersPanel) usersPanel.hidden = !usersIsActive;
     if (statusIsActive) {
         loadDocumentStatus().catch((e) => console.error("document status", e));
     }
     if (rawDataIsActive) {
         loadRawData().catch((e) => console.error("raw data", e));
+    }
+    if (usersIsActive) {
+        loadUsers().catch((e) => console.error("users", e));
     }
     if (dashboardIsActive) {
         loadDashboard().catch((e) => console.error("dashboard", e));
@@ -613,6 +713,7 @@ themeToggle.onclick = () => {
 tabDashboard?.addEventListener("click", () => setActiveTab("dashboard"));
 tabDocumentStatus?.addEventListener("click", () => setActiveTab("document-status"));
 tabRawData?.addEventListener("click", () => setActiveTab("raw-data"));
+tabUsers?.addEventListener("click", () => setActiveTab("users"));
 refreshDocumentStatusBtn?.addEventListener("click", () => {
     loadDocumentStatus().catch((e) => console.error("document status", e));
 });

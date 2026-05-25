@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,15 +7,43 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="container">
+    <!-- LOGIN SECTION -->
+    <main id="login-section" class="container">
       <h1>Simple Chatbot</h1>
+      <form id="login-form" class="login-form">
+        <input
+          id="login-username"
+          type="text"
+          placeholder="Usuario"
+          autocomplete="username"
+          required
+        />
+        <input
+          id="login-password"
+          type="password"
+          placeholder="Contraseña"
+          autocomplete="current-password"
+          required
+        />
+        <button type="submit">Entrar</button>
+        <p id="login-error" class="login-error" hidden></p>
+      </form>
+    </main>
+
+    <!-- CHAT SECTION (hidden until authenticated) -->
+    <main id="chat-section" class="container" hidden>
+      <div class="chat-header">
+        <h1>Simple Chatbot</h1>
+        <button id="logout-btn" type="button" class="logout-btn">Salir</button>
+      </div>
       <div id="messages" class="messages"></div>
       <form id="chat-form" class="chat-form">
-        <input id="query-input" placeholder="Ask a question..." autocomplete="off" required />
-        <button type="submit">Send</button>
+        <input id="query-input" placeholder="Escribe una pregunta..." autocomplete="off" required />
+        <button type="submit">Enviar</button>
       </form>
       <div id="sources"></div>
     </main>
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/app.js"></script>
   </body>

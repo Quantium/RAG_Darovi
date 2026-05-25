@@ -595,6 +595,8 @@ class SyncMetadataRepository:
         values["text_error"] = text_error
         if text_status == "ready_for_embedding":
             values["text_extracted_at"] = datetime.now(timezone.utc)
+        if text_status == "embedding_queued":
+            values["last_processed_at"] = datetime.now(timezone.utc)
         if values:
             self._session.execute(update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(**values))
             self._session.commit()
@@ -607,6 +609,40 @@ class SyncMetadataRepository:
             .scalars()
             .all()
         )
+
+    def batch_mark_embedding_queued_sync(self) -> list[dict]:
+        """Atomically flip all ready_for_embedding (with text key) to embedding_queued in one query."""
+        result = self._session.execute(
+            text(
+                """
+                UPDATE file_records
+                SET text_status = 'embedding_queued',
+                    text_error = NULL,
+                    last_processed_at = NOW()
+                WHERE text_status = 'ready_for_embedding'
+                  AND minio_text_key IS NOT NULL
+                RETURNING drive_file_id, minio_text_key, minio_raw_key, mime_type, name
+                """
+            )
+        )
+        self._session.commit()
+        return [dict(row) for row in result.mappings()]
+
+    def batch_fail_missing_text_key_sync(self) -> int:
+        """Mark ready_for_embedding files with no minio_text_key as failed (returns count)."""
+        result = self._session.execute(
+            text(
+                """
+                UPDATE file_records
+                SET text_status = 'failed',
+                    text_error = 'Missing minio_text_key for embedding handoff'
+                WHERE text_status = 'ready_for_embedding'
+                  AND minio_text_key IS NULL
+                """
+            )
+        )
+        self._session.commit()
+        return result.rowcount
 
     def reset_stale_embedding_queued_sync(self, stale_after_seconds: int) -> int:
         """Reset embedding_queued files that have been stuck longer than stale_after_seconds.
@@ -623,7 +659,7 @@ class SyncMetadataRepository:
                 SET text_status = 'ready_for_embedding',
                     text_error = 'auto-reset: stuck in embedding_queued'
                 WHERE text_status = 'embedding_queued'
-                  AND text_extracted_at < :cutoff
+                  AND (last_processed_at IS NULL OR last_processed_at < :cutoff)
                 """
             ),
             {"cutoff": cutoff},
