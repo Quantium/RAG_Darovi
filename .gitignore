@@ -38,3 +38,4 @@ test.db
 **/.ruff_cache/
 .claude/
 LABORATORIOS/
+backups/
