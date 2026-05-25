@@ -1,116 +1,190 @@
-# AGENTS.md (Orchestrator) - AI Agent Guide
+# AGENTS.md — AI Agent Context for RAG Darovi
 
-This file is the canonical project briefing for coding agents working in the **orchestrator** repository (`Quantium/RAG_Darovi`). The platform is now split across multiple repositories. This repo no longer contains application code, only orchestration: Docker Compose, environment templates, gates, scripts, and documentation that ties the multi-repo system together.
+**Canonical briefing for coding agents** (Claude Code, Cursor, GitHub Copilot, Codex, etc.) working in this repository. Read this file fully before taking any action. It encodes invariants that are not derivable from the code alone.
 
-For the deep architecture and behavior of each component, follow the `AGENTS.md` inside the corresponding submodule.
-
----
-
-## What This Repository Is
-
-The orchestrator runs the RAG Darovi platform locally via Docker Compose. It mounts every runtime as a git submodule:
-
-| Submodule path | Source repository | Responsibility |
-|---|---|---|
-| `services/ingest_raw` | `Quantium/rag-service-ingest-raw` | RAW ingestion from Drive/local to MinIO |
-| `services/extract_text` | `Quantium/rag-service-extract-text` | Text extraction from RAW into MinIO TEXT |
-| `services/retrieval_admin` | `Quantium/rag-service-retrieval-admin` | Retrieval/admin API + simplified UI |
-| `services/chatbot_response` | `Quantium/rag-service-chatbot-response` | Chat API + minimal chat UI |
-| `dashboard/rag-dashboard-core` | `Quantium/rag-legacy-core` | Dashboard FastAPI + Celery monolith pending further decomposition |
-| `schema/rag-schema` | `Quantium/rag-schema` | Shared Alembic migrations |
-| `qa/rag-e2e-contracts` | `Quantium/rag-e2e-contracts` | Cross-service contracts and Playwright e2e |
-
-The dashboard monolith image powers the `dashboard-api`, `dashboard-worker`, `dashboard-worker-vision`, `dashboard-beat` and `dashboard-qa` Compose services. The other Compose services build directly from their submodule path.
+For Claude Code specifically, the authoritative behavioral contract is `CLAUDE.md`.
 
 ---
 
-## Repository Layout
+## Domain Context
+
+**Darovi** is a Mexican distributor of medicines and health assets, supplying government dependencies (IMSS, ISSSTE, Secretaría de Salud) through CEDIS (Centros de Distribución). Contracts are large, multi-document bundles subject to strict health and procurement regulations. Documents are heterogeneous: scanned PDFs with stamps and signatures, package photos, Excel catalogs, Word specifications.
+
+**This platform** solves: convert an unstructured document archive into a semantically-searchable, conversational knowledge base. Core pipeline: ingest binaries → extract text (digital layer or vision OCR) → embed chunks as high-dimensional vectors → store in a vector database → retrieve semantically at query time → generate LLM answers with source citations.
+
+Architecture: [RAG (Retrieval-Augmented Generation)](https://arxiv.org/abs/2005.11401) over a self-hosted document corpus, running entirely in Docker on-premises.
+
+---
+
+## Repository Structure
+
+**Monorepo** — submodules dissolved 2026-05. All service code is tracked as regular files.
 
 ```
-docker-compose.yml         # Orchestration entrypoint (build contexts point to submodules)
-Makefile                   # Orchestrator-only targets
-scripts/                   # Bootstrap and verification helpers
-docs/repo-split/           # Split history, mapping and verification gates
-.env.example               # Environment template for the full stack
-production.env.example     # Production environment template
-services/                  # Submodules: independent service repos
-dashboard/rag-dashboard-core/  # Submodule: dashboard core
-schema/rag-schema/         # Submodule: shared Alembic
-qa/rag-e2e-contracts/      # Submodule: cross-service contracts
+services/
+  ingest_raw/          FastAPI + APScheduler. Watches LOCAL_SOURCE_FOLDER; SHA-256 dedup;
+                       uploads to MinIO raw-files; creates file_records rows.
+  extract_text/        FastAPI + APScheduler. Downloads RAW from MinIO; runs pdfplumber /
+                       python-docx / openpyxl; quality-checks text (alpha ratio, char count);
+                       emits vision sentinels; writes markdown to MinIO converted-texts.
+  retrieval_admin/     FastAPI. POST /retrieve: embed query via OpenAI → Milvus COSINE
+                       search → Redis cache (TTL 5 min) → return chunks + source metadata.
+  chatbot_response/    FastAPI + WebSocket. POST /chat and WS /ws/chat: load Redis history →
+                       call retrieval-admin → call DeepSeek LLM → persist turn → return answer.
+
+dashboard/
+  rag-dashboard-core/  FastAPI API + Celery worker/beat/vision monolith.
+    src/api/           FastAPI routes: /status /chat /ingest /dashboard/* /files/*
+    src/worker/        Celery tasks: download_file, embed_file, vision_extract,
+                       poll_text_ready_for_embedding, restart_vectorization.
+    src/vectorizer/    OpenAI embedder + MilvusStore (ORM-style PyMilvus, due for migration
+                       to MilvusClient in a future sprint).
+    src/vision/        OpenAICompatVisionClient (httpx, async). CircuitBreaker (Redis-backed).
+                       Tesseract fallback. Retry with image downscale on timeout.
+    src/converter/     pdfplumber / docx / xlsx converters with per-page quality check.
+    config/settings.py Pydantic-settings. Single source of truth for all env vars.
+
+schema/
+  rag-schema/          Alembic migrations. Schema changes MUST go through here.
+
+qa/
+  rag-e2e-contracts/   Cross-service HTTP contracts + Playwright browser tests.
+
+scripts/
+  backup.sh            Backup: pg_dump + Python minio streaming tar + Milvus parquet export.
+  restore.sh           Restore: psql restore + minio put_object + Milvus drop/recreate/insert.
 ```
 
-There is no `src/`, `tests/`, `config/` or `requirements.txt` in this repo: those moved to `dashboard/rag-dashboard-core` during the second cleanup.
+---
+
+## Inference Stack
+
+No local inference containers exist. All AI runs via external APIs:
+
+| Capability | Provider | Model | SDK call |
+|-----------|----------|-------|----------|
+| Text embeddings | OpenAI | `text-embedding-3-large` (3072 dims) | `client.embeddings.create()` |
+| Vision OCR | OpenAI | `gpt-4o` | `client.chat.completions.create()` with `image_url` content |
+| Chat completion | DeepSeek | `deepseek-chat` | `openai.AsyncOpenAI(base_url=deepseek_url)` |
+
+OpenAI and DeepSeek both use the OpenAI Python SDK. DeepSeek is OpenAI-API-compatible at `https://api.deepseek.com/v1/`.
 
 ---
 
-## Mandatory Principles
+## Data Flow Invariants
 
-- **Schema safety**: never change PostgreSQL schema (`file_records` or related tables) without alerting the requester first and confirming migration impact. Schema lifecycle lives in `rag-schema`.
-- **Submodule discipline**: all changes to service code must happen inside the corresponding submodule's repo, then surface here as a submodule pointer bump.
-- **Stable rollback baseline**: tag `v0.8.0` is the recovery anchor pre-split. See [docs/repo-split/VERIFICATION_GATES.md](docs/repo-split/VERIFICATION_GATES.md) for the rollback procedure.
-- **Documentation in English** for all repos (matches the prior project rule).
+### Ingestion pipeline (critical state machine)
+
+```
+file_records.raw_status:   pending → synced          (ingest_raw writes raw_checksum SHA-256)
+file_records.text_status:
+  pending → ready_for_embedding                       (extract_text: text OK)
+  pending → vision_pending                            (extract_text: low-quality text detected)
+  vision_pending → vision_processing → ready_for_embedding  (Celery vision_extract task)
+  ready_for_embedding → embedding_queued → embedded   (Celery embed_file task)
+file_records.status: downloaded → converted → embedded
+```
+
+**Guard conditions** (encoded in service logic, do not break):
+- `extract_text` only reads rows where `raw_status='synced' AND raw_checksum IS NOT NULL`
+- `embed_file` only processes rows where `text_status='ready_for_embedding'`
+- `poll_text_ready_for_embedding` is the only entry point to `embedding_queued` — do not set this status directly
+- `chunk_count` on `file_records` reflects actual Milvus entity count for that file, kept in sync by `embed_file`
+
+### Milvus collection schema (must not drift)
+
+Collection: `rag_documents` · Index: HNSW COSINE · M=16 efConstruction=256 · dim=3072  
+Partitions: `doc`, `sheet`, `pdf` (determined by `document_type` field on each chunk)  
+Primary key: `id` VARCHAR — format: `{source_file_id}_{chunk_index}`  
+Fields: `id`, `source_file_id`, `source_name`, `document_type`, `section_title`, `chunk_index` (INT64), `text` (VARCHAR 65535), `embedding` (FLOAT_VECTOR 3072)
+
+**Invariant**: `EMBED_DIM` env var and Milvus collection `dim` must always agree. Changing either requires `drop_collection_if_exists()` + `ensure_milvus_collection()` + full re-embedding.
+
+### MinIO bucket layout
+
+| Bucket | Key format | Contents |
+|--------|-----------|---------|
+| `raw-files` | `{drive_file_id}` | Original binary (PDF, DOCX, XLSX, image) |
+| `converted-texts` | `{drive_file_id}.md` | Extracted markdown text |
+| `a-bucket` | Milvus internal paths | Milvus vector segment files (do not modify) |
 
 ---
 
-## Verification Gates
+## Code Patterns and Style
 
-Run from the orchestrator root:
+**Language**: Python 3.11+. Type hints everywhere. `from __future__ import annotations` on all modules.
 
-| Target | What it does |
-|--------|--------------|
-| `make qa-dashboard` | Run dashboard core unit suite |
-| `make qa-services` | Run unit suite of each service submodule |
-| `make qa-cross` | Run cross-service contract tests (HTTP + schema) |
-| `make qa-all` | All of the above in order |
+**Settings**: `pydantic-settings` `BaseSettings`. All config comes from env vars. Field `embed_api_key: SecretStr` maps to env var `EMBED_API_KEY` (case-insensitive). Never hardcode secrets.
 
-Cross-service HTTP contracts require the Compose stack to be up (`make up`).
+**Async**: FastAPI routes are async. Celery tasks are sync (they use `create_engine` + `Session`, not `AsyncSession`). The `database_url_sync` setting exists specifically for Celery workers.
 
-For end-to-end smoke after `make up`:
+**Logging**: `structlog` with `logger.bind(key=value)` pattern. Event names are `module.action` (e.g., `milvus.upserted`, `task.completed`). Do not use `print()` for observability.
+
+**Error handling**: Tasks use `@app.task(bind=True, max_retries=N)` with `self.retry(exc=e, countdown=N)`. Retry counts and backoffs are per-task (not global). Vision tasks downscale images before retry.
+
+**Imports**: Absolute imports using `src.` prefix in dashboard (e.g., `from src.vision.client import OpenAICompatVisionClient`). Service imports use `app.` prefix.
+
+**Tests**: `pytest` with `pytest-asyncio`. Tests live in `tests/` within each service/dashboard. Use `make install && make test` inside each directory.
+
+---
+
+## Known Architectural Debt
+
+- `MilvusStore` in `src/vectorizer/milvus_store.py` uses deprecated ORM-style PyMilvus API (`connections.connect`, `Collection`, `utility.*`). PyMilvus recommends `MilvusClient` (from pymilvus 2.4+). Functional but will break in pymilvus 3.1.
+- `dashboard-api` runs HTTPS (TLS via Uvicorn). Internal health checks and curl commands require `-k` (skip cert verification) for self-signed certs.
+- The `retrieval-admin-service` has a legacy `/answer` endpoint that calls a small LLM. This is not used by `chatbot_response` in production (which calls its own LLM chain). It exists for direct API consumers.
+
+---
+
+## Critical Constraints for Agents
+
+1. **Schema changes**: Never modify `file_records`, `sync_state`, `drive_connection`, or `extracted_documents` table definitions without explicitly alerting the requester and confirming migration impact. Schema changes require a new Alembic migration in `schema/rag-schema/`.
+
+2. **Volume safety**: `docker compose down -v` deletes all named volumes including Milvus vectors and MinIO files. Always run `./scripts/backup.sh` before any operation involving volumes.
+
+3. **Env var coupling**: Adding a new env var requires changes in: (a) the service's `settings.py`, (b) `docker-compose.yml` environment block, and (c) `.env.example`. All three must be updated atomically.
+
+4. **English-only documentation**: All comments, docstrings, commit messages, PR descriptions, and documentation files must be in English. The user communicates in Spanish; output code and docs in English.
+
+5. **No direct Milvus data modification**: Only `embed_file` and `restart_vectorization` tasks should write to Milvus. Never insert/delete vectors directly from ad-hoc scripts unless explicitly requested by the requester.
+
+6. **Celery task idempotency**: The `embed_file` task calls `store.delete_by_source(drive_file_id)` before inserting — it is idempotent by design. Do not add guards that skip re-insertion.
+
+---
+
+## Build and Test Commands
 
 ```bash
-./scripts/verify-multi-repo-local.sh
+# Full stack
+docker compose up -d --build          # build + start all services
+docker compose up -d --build --no-deps <svc>  # rebuild single service
+
+# Service tests (each has its own venv via make install)
+cd services/ingest_raw    && make install && make test
+cd services/extract_text  && make install && make test
+cd services/retrieval_admin && make install && make test
+cd services/chatbot_response && make install && make test
+cd dashboard/rag-dashboard-core && make install && make test
+
+# Cross-service (requires stack running)
+cd qa/rag-e2e-contracts && make install && make test
+
+# Backup (always before destructive ops)
+./scripts/backup.sh
+./scripts/restore.sh backups/YYYYMMDD_HHMMSS
 ```
 
 ---
 
-## Operational Expectations
+## Port Map
 
-- `docker compose up -d` leaves all declared services healthy.
-- `extract_text` produces text artifacts and updates metadata with only Postgres + MinIO running.
-- `chatbot_response` answers while `ingest_raw` and `extract_text` are stopped, as long as retrieval dependencies are healthy.
-- Submodule pointers are committed in the orchestrator and reproducible via `git submodule update --init --recursive`.
-
----
-
-## Common Commands
-
-```bash
-make submodules     # git submodule sync + update
-make up             # docker compose up -d
-make down           # docker compose down
-make docker-build   # docker compose build
-make docker-qa      # dashboard core QA image
-make qa-dashboard   # dashboard core unit tests
-make qa-services    # all service unit tests
-make qa-cross       # cross-service contracts
-make qa-all         # all gates above
-make tls-certs      # generate local TLS certs
-make clean          # down -v + cleanup __pycache__
 ```
-
----
-
-## Where to Make a Change
-
-| Goal | Repo |
-|------|------|
-| Modify chat API behavior | `services/chatbot_response` |
-| Modify retrieval logic | `services/retrieval_admin` |
-| Modify text extraction | `services/extract_text` |
-| Modify ingestion source | `services/ingest_raw` |
-| Modify the dashboard worker / vision pipeline | `dashboard/rag-dashboard-core` |
-| Add or change a DB migration | `schema/rag-schema` |
-| Add cross-service contracts or e2e specs | `qa/rag-e2e-contracts` |
-| Adjust orchestration (compose, env, scripts) | this repository |
-
-If a change requires both a service code change and an orchestrator change (for example, a new env var), make the service change first, push it, and then bump the submodule pointer here.
+8000 → dashboard-api    (HTTPS; main UI + REST + /dashboard/*)
+8010 → retrieval-admin  (HTTP; POST /retrieve, POST /answer, GET /status)
+8020 → chatbot-response (HTTP + WebSocket; POST /chat, WS /ws/chat)
+5432 → PostgreSQL 16
+6379 → Redis 7          (DB0: Celery broker, DB1: results, DB2: cache+history)
+9000 → MinIO API        (S3-compatible)
+9001 → MinIO console    (browser UI)
+19530→ Milvus gRPC
+```

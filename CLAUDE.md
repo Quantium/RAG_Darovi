@@ -1,102 +1,134 @@
-# CLAUDE.md
+# CLAUDE.md — Project Memory for Claude Code
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is loaded automatically at every Claude Code session. It is a **behavioral contract**, not documentation. Every line consumes context — keep it specific and verifiable.
 
-## What this repo is
+---
 
-This is the **orchestrator** for the RAG Darovi platform. It contains no application source code: every runtime lives in a git submodule. The orchestrator owns `docker-compose.yml`, the `.env` template, Makefile targets, scripts, and documentation that ties the multi-repo system together.
+## Repository Identity
 
-## Submodule map
+**Monorepo** — all service code lives directly in this repository. Submodules were dissolved in May 2026; all paths below are regular tracked files.
 
-| Path | Source repo | Responsibility |
-|------|-------------|----------------|
-| `services/ingest_raw` | `Quantium/rag-service-ingest-raw` | Ingestion from local folder → MinIO RAW |
-| `services/extract_text` | `Quantium/rag-service-extract-text` | Text extraction RAW → MinIO TEXT; routes scanned pages to vision |
-| `services/retrieval_admin` | `Quantium/rag-service-retrieval-admin` | Retrieval API: embed query (OpenAI) → Milvus search → Redis cache |
-| `services/chatbot_response` | `Quantium/rag-service-chatbot-response` | Chat REST + WebSocket; calls retrieval-admin; DeepSeek LLM |
-| `dashboard/rag-dashboard-core` | `Quantium/rag-legacy-core` | FastAPI dashboard + Celery monolith (worker, beat, vision worker) |
-| `schema/rag-schema` | `Quantium/rag-schema` | Shared Alembic migrations |
-| `qa/rag-e2e-contracts` | `Quantium/rag-e2e-contracts` | Cross-service HTTP contracts + Playwright e2e |
-
-The `dashboard/rag-dashboard-core` submodule builds four Compose services: `dashboard-api`, `dashboard-worker`, `dashboard-worker-vision`, and `dashboard-beat`.
-
-## Common commands
-
-```bash
-# First-time setup
-git submodule update --init --recursive
-cp .env.example .env
-
-# Update all submodules to their latest published commits
-make submodules
-
-# Stack lifecycle
-make up            # docker compose up -d
-make down          # docker compose down
-make docker-build  # docker compose build
-make clean         # docker compose down -v + rm __pycache__
-
-# Verification
-make qa-dashboard  # dashboard core unit suite
-make qa-services   # all service submodule unit suites
-make qa-cross      # cross-service contract tests (requires stack up)
-make qa-all        # all three gates in order
-
-# Smoke check after `make up`
-docker compose ps
-curl -fsS http://localhost:8000/status
-curl -fsS http://localhost:8010/health
-curl -fsS http://localhost:8020/health
-./scripts/verify-multi-repo-local.sh
-
-# TLS (optional local HTTPS)
-make tls-certs
+```
+services/ingest_raw/         ← RAW ingestion: LABORATORIOS/ → MinIO raw-files
+services/extract_text/       ← Text extraction: MinIO RAW → MinIO converted-texts
+services/retrieval_admin/    ← Retrieval API: OpenAI embed → Milvus search → Redis cache
+services/chatbot_response/   ← Chat API: retrieval-admin + DeepSeek LLM + Redis history
+dashboard/rag-dashboard-core/← FastAPI + Celery monolith (worker, beat, vision worker)
+schema/rag-schema/           ← Alembic migrations (schema source of truth)
+qa/rag-e2e-contracts/        ← Cross-service HTTP contracts + Playwright e2e
+docker-compose.yml           ← Orchestration entrypoint
+.env / .env.example          ← Runtime configuration (gitignored)
+scripts/backup.sh            ← Point-in-time backup: PG + MinIO texts + Milvus parquet
+scripts/restore.sh           ← Restore from backup directory
 ```
 
-## Pipeline state machine (`file_records`)
+---
 
-The PostgreSQL `file_records` table drives the entire ingestion pipeline. Key status columns and their progression:
+## Inference Providers (current state)
 
-- `raw_status`: `pending` → `synced` (set by `ingest_raw` on successful MinIO upload, includes `raw_checksum` SHA-256)
-- `text_status`: `pending` → `ready_for_embedding` (set by `extract_text` when text is in MinIO TEXT bucket)
-- `status`: `downloaded` → `converted` → `embedded`
+| Function | Provider | Model | Env var |
+|----------|----------|-------|---------|
+| Embeddings | OpenAI | `text-embedding-3-large` (dim=3072) | `EMBED_API_KEY` |
+| Vision OCR | OpenAI | `gpt-4o` | `VISION_EXTERNAL_API_KEY` |
+| Chat LLM | DeepSeek | `deepseek-chat` | `DEEPSEEK_API_KEY` |
 
-`extract_text` only picks rows where `raw_status='synced'` AND `raw_checksum IS NOT NULL`. The Celery worker only dispatches to Milvus when `text_status='ready_for_embedding'`. If files are stuck, see `scripts/README-backfill.md` for diagnostic SQL and remediation options.
+Ollama is **not** used. Google Drive is **not** used.
 
-## Container port map
+---
 
-| Port | Container |
+## Common Commands
+
+```bash
+# Stack
+make up            # docker compose up -d
+make down          # docker compose down  (volumes preserved)
+make clean         # docker compose down -v  ← DELETES ALL VOLUMES
+make docker-build  # docker compose build
+
+# Rebuild one service after code change
+docker compose up -d --build --no-deps <service-name>
+
+# Smoke check
+docker compose ps
+curl -k https://localhost:8000/status
+curl http://localhost:8010/health
+curl http://localhost:8020/health
+
+# Test suites (each bootstraps its own venv)
+make qa-dashboard  # dashboard/rag-dashboard-core pytest
+make qa-services   # all four services
+make qa-cross      # qa/rag-e2e-contracts (requires stack up)
+make qa-all        # all three gates
+
+# Backup / restore
+./scripts/backup.sh                    # PG + MinIO texts + Milvus parquet
+./scripts/backup.sh --include-raw      # also raw-files (~4 GB extra)
+./scripts/restore.sh backups/YYYYMMDD_HHMMSS
+```
+
+---
+
+## Pipeline State Machine (`file_records`)
+
+Every file progresses through PostgreSQL `file_records` columns. Never modify these states manually without understanding the full chain.
+
+```
+raw_status:   pending → synced            (ingest_raw: MinIO upload + SHA-256 checksum)
+text_status:  pending → ready_for_embedding    (extract_text: text written to MinIO)
+              pending → vision_pending          (extract_text: scanned page detected)
+              vision_pending → vision_processing → ready_for_embedding  (GPT-4o OCR)
+              ready_for_embedding → embedding_queued → embedded  (Celery embed_file task)
+status:       downloaded → converted → embedded
+```
+
+`extract_text` only processes rows where `raw_status='synced' AND raw_checksum IS NOT NULL`.
+Celery beat fires `poll_text_ready_for_embedding` every `EMBEDDING_POLL_INTERVAL_SECONDS` (default 300s).
+Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatically.
+
+---
+
+## Where to Make Changes
+
+| Goal | Edit path |
 |------|-----------|
-| 8000 | `dashboard-api` (main UI + API) |
-| 8010 | `retrieval-admin-service` (REST API only, no frontend) |
-| 8020 | `chatbot-response-service` |
+| Chat API behavior | `services/chatbot_response/app/` |
+| Retrieval / embedding logic | `services/retrieval_admin/app/` |
+| Text extraction / OCR routing | `services/extract_text/app/` |
+| File ingestion source | `services/ingest_raw/app/` |
+| Dashboard API routes | `dashboard/rag-dashboard-core/src/api/` |
+| Celery tasks / embedding pipeline | `dashboard/rag-dashboard-core/src/worker/tasks.py` |
+| Vision OCR client | `dashboard/rag-dashboard-core/src/vision/client.py` |
+| Milvus schema / index | `dashboard/rag-dashboard-core/src/vectorizer/milvus_store.py` |
+| DB schema / migrations | `schema/rag-schema/` (Alembic) |
+| Docker Compose / env vars | `docker-compose.yml`, `.env.example` |
+| Backup / restore scripts | `scripts/backup.sh`, `scripts/restore.sh` |
+
+---
+
+## Mandatory Constraints
+
+**Schema safety**: Never modify `file_records` or related tables without confirming migration impact. All schema changes go through `schema/rag-schema` using Alembic. Alert the requester before touching schema.
+
+**Env var naming**: Settings use `pydantic-settings` which maps `SNAKE_CASE` env vars to lowercase field names. The dashboard settings file is `dashboard/rag-dashboard-core/config/settings.py`; each service has `app/settings.py`. Always verify both sides when adding a new env var.
+
+**Milvus + embeddings coupling**: `EMBED_DIM` and `EMBED_MODEL` must match the stored collection schema. Changing either requires dropping and recreating the Milvus collection (`store.drop_collection_if_exists()`) and re-running the full embedding pipeline.
+
+**Volume safety**: `make clean` runs `docker compose down -v` which deletes `pgdata`, `miniodata`, `milvusdata`, `redisdata`. Run `./scripts/backup.sh` before any destructive operation.
+
+**English documentation**: All code comments, docstrings, commit messages, and documentation files must be in English.
+
+---
+
+## Port Map
+
+| Port | Service |
+|------|---------|
+| 8000 | `dashboard-api` (HTTPS, main UI) |
+| 8010 | `retrieval-admin-service` (HTTP, REST only, no UI) |
+| 8020 | `chatbot-response-service` (HTTP + WebSocket) |
 | 5432 | PostgreSQL |
 | 6379 | Redis |
-| 9000/9001 | MinIO API / console |
-| 19530 | Milvus |
+| 9000 / 9001 | MinIO API / console |
+| 19530 | Milvus gRPC |
 
-Redis logical DBs: 0 = Celery broker, 1 = Celery results, 2 = retrieval cache + conversation history.
-
-Inference is handled by external APIs: **OpenAI** for embeddings (`text-embedding-3-large`) and vision (`gpt-4o`); **DeepSeek** for chat LLM.
-
-## Where to make a change
-
-| Goal | Repo |
-|------|------|
-| Chat API behavior | `services/chatbot_response` |
-| Retrieval logic | `services/retrieval_admin` |
-| Text extraction | `services/extract_text` |
-| Ingestion source | `services/ingest_raw` |
-| Dashboard worker / vision pipeline | `dashboard/rag-dashboard-core` |
-| DB schema / migrations | `schema/rag-schema` |
-| Cross-service contracts or e2e specs | `qa/rag-e2e-contracts` |
-| Compose, env vars, scripts | this repo |
-
-When a change touches both a service and the orchestrator (e.g. a new env var), make the service change first, push it, then bump the submodule pointer here with `git add <submodule-path> && git commit`.
-
-## Mandatory constraints
-
-- **Schema safety**: never modify `file_records` or related tables without confirming migration impact with the requester. All schema changes go through `schema/rag-schema` (Alembic).
-- **Submodule discipline**: application code changes must happen in the submodule's own repo, not by editing files in the mounted path directly (those edits are untracked by the orchestrator's git).
-- **Documentation in English** across all repos.
-- **Rollback baseline**: tag `v0.8.0` is the recovery anchor pre-split. See `docs/repo-split/VERIFICATION_GATES.md` for rollback procedure.
+Redis DBs: 0 = Celery broker (AOF persistent), 1 = Celery results, 2 = retrieval cache + conversation history.
