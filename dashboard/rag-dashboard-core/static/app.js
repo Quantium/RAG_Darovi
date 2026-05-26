@@ -613,8 +613,12 @@ async function loadDashboard() {
     }
 }
 
-const tabUsers         = document.getElementById("tab-users");
-const usersPanel       = document.getElementById("users-panel");
+const tabUsers          = document.getElementById("tab-users");
+const usersPanel        = document.getElementById("users-panel");
+const tabResponses      = document.getElementById("tab-responses");
+const responsesPanel    = document.getElementById("responses-panel");
+const responsesTableBody = document.getElementById("responses-table-body");
+const responsesEmpty    = document.getElementById("responses-empty");
 const usersTableBody   = document.getElementById("users-table-body");
 const usersEmpty       = document.getElementById("users-empty");
 const createUserBtn    = document.getElementById("create-user-btn");
@@ -707,20 +711,54 @@ refreshUsersBtn?.addEventListener("click", () => {
     loadUsers().catch((e) => console.error("users refresh", e));
 });
 
+async function loadResponses() {
+    if (responsesEmpty) responsesEmpty.hidden = true;
+    if (responsesTableBody) responsesTableBody.innerHTML = "";
+    try {
+        const res = await fetch("/responses", { headers: apiHeaders() });
+        if (!res.ok) throw new Error(`responses ${res.status}`);
+        const items = await res.json();
+        if (items.length === 0) {
+            if (responsesEmpty) responsesEmpty.hidden = false;
+            return;
+        }
+        items.forEach((item) => {
+            const ratingIcon = item.rating === "positive" ? "👍" : item.rating === "negative" ? "👎" : "—";
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td class="responses-cell">${escapeHtml(item.question)}</td>
+                <td class="responses-cell">${escapeHtml(item.answer)}</td>
+                <td class="responses-rating">${ratingIcon}</td>
+                <td class="responses-cell">${escapeHtml(item.correction || "—")}</td>
+            `;
+            if (responsesTableBody) responsesTableBody.appendChild(tr);
+        });
+    } catch (err) {
+        if (responsesTableBody) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `<td colspan="4">Error al cargar respuestas: ${escapeHtml(err.message || String(err))}</td>`;
+            responsesTableBody.appendChild(tr);
+        }
+    }
+}
+
 function setActiveTab(nextTab) {
     state.activeTab = nextTab;
     const dashboardIsActive = nextTab === "dashboard";
     const statusIsActive = nextTab === "document-status";
     const rawDataIsActive = nextTab === "raw-data";
     const usersIsActive = nextTab === "users";
+    const responsesIsActive = nextTab === "responses";
     tabDashboard?.classList.toggle("active", dashboardIsActive);
     tabDocumentStatus?.classList.toggle("active", statusIsActive);
     tabRawData?.classList.toggle("active", rawDataIsActive);
     tabUsers?.classList.toggle("active", usersIsActive);
+    tabResponses?.classList.toggle("active", responsesIsActive);
     if (dashboardPanel) dashboardPanel.hidden = !dashboardIsActive;
     if (documentStatusPanel) documentStatusPanel.hidden = !statusIsActive;
     if (rawDataPanel) rawDataPanel.hidden = !rawDataIsActive;
     if (usersPanel) usersPanel.hidden = !usersIsActive;
+    if (responsesPanel) responsesPanel.hidden = !responsesIsActive;
     if (statusIsActive) {
         loadDocumentStatus().catch((e) => console.error("document status", e));
     }
@@ -729,6 +767,9 @@ function setActiveTab(nextTab) {
     }
     if (usersIsActive) {
         loadUsers().catch((e) => console.error("users", e));
+    }
+    if (responsesIsActive) {
+        loadResponses().catch((e) => console.error("responses", e));
     }
     if (dashboardIsActive) {
         loadDashboard().catch((e) => console.error("dashboard", e));
@@ -760,6 +801,10 @@ tabDashboard?.addEventListener("click", () => setActiveTab("dashboard"));
 tabDocumentStatus?.addEventListener("click", () => setActiveTab("document-status"));
 tabRawData?.addEventListener("click", () => setActiveTab("raw-data"));
 tabUsers?.addEventListener("click", () => setActiveTab("users"));
+tabResponses?.addEventListener("click", () => setActiveTab("responses"));
+document.getElementById("refresh-responses-btn")?.addEventListener("click", () => {
+    loadResponses().catch((e) => console.error("responses refresh", e));
+});
 refreshDocumentStatusBtn?.addEventListener("click", () => {
     loadDocumentStatus().catch((e) => console.error("document status", e));
 });

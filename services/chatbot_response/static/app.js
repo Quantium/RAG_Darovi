@@ -114,6 +114,65 @@ function renderSources(sources) {
     </table>`;
 }
 
+// ── Rating ────────────────────────────────────────────────────────────────────
+function addRatingButtons(interactionId) {
+  document.querySelectorAll(".rating-bar").forEach(el => el.remove());
+
+  const bar = document.createElement("div");
+  bar.className = "rating-bar";
+  bar.innerHTML = `
+    <button class="rate-btn" data-rating="positive" title="Buena respuesta">👍</button>
+    <button class="rate-btn" data-rating="negative" title="Mala respuesta">👎</button>`;
+
+  bar.querySelectorAll(".rate-btn").forEach(btn => {
+    btn.addEventListener("click", () => handleRating(btn.dataset.rating, interactionId, bar));
+  });
+
+  form.parentNode.insertBefore(bar, form);
+}
+
+async function handleRating(rating, interactionId, bar) {
+  if (rating === "positive") {
+    await postRating(interactionId, "positive", null);
+    bar.remove();
+  } else {
+    showCorrectionDialog(interactionId, bar);
+  }
+}
+
+function showCorrectionDialog(interactionId, bar) {
+  if (bar.querySelector(".correction-dialog")) return;
+
+  const dialog = document.createElement("div");
+  dialog.className = "correction-dialog";
+  dialog.innerHTML = `
+    <p>¿Cuál debió haber sido la respuesta?</p>
+    <textarea class="correction-text" rows="4"></textarea>
+    <button class="correction-submit">Enviar</button>`;
+
+  dialog.querySelector(".correction-submit").addEventListener("click", async () => {
+    const correction = dialog.querySelector(".correction-text").value.trim();
+    await postRating(interactionId, "negative", correction || null);
+    dialog.remove();
+    bar.remove();
+  });
+
+  bar.appendChild(dialog);
+}
+
+async function postRating(interactionId, rating, correction) {
+  try {
+    await fetch("/rate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ interaction_id: interactionId, rating, correction }),
+    });
+  } catch (_) {}
+}
+
 // ── Chat submit ───────────────────────────────────────────────────────────────
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -124,6 +183,7 @@ form.addEventListener("submit", async (event) => {
   addMessage("user", query);
   const assistant = addMessage("assistant", "...");
   sourcesEl.innerHTML = "";
+  document.querySelectorAll(".rating-bar").forEach(el => el.remove());
 
   try {
     const res = await fetch("/chat", {
@@ -146,6 +206,7 @@ form.addEventListener("submit", async (event) => {
     conversationId = data.conversation_id;
     assistant.innerHTML = marked.parse(data.answer);
     renderSources(data.sources);
+    addRatingButtons(data.interaction_id);
   } catch (error) {
     assistant.textContent = `Error: ${String(error)}`;
   }

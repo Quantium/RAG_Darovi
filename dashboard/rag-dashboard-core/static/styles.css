@@ -832,3 +832,19 @@ footer {
 
 .users-error { color: #e55; }
 .users-ok    { color: #2a9d5c; }
+
+/* ── Respuestas ──────────────────────────────────────────────────────────────*/
+.responses-cell {
+    max-width: 320px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85rem;
+    vertical-align: top;
+}
+
+.responses-rating {
+    text-align: center;
+    vertical-align: top;
+    font-size: 1.1rem;
+}
+

@@ -134,3 +134,69 @@ button {
 }
 
 .logout-btn:hover { background: #c33; }
+
+/* ── Rating bar ──────────────────────────────────────────────────────────────*/
+.rating-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  position: relative;
+}
+
+.rate-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #c9d3df;
+  background: #f0f2f5;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rate-btn:hover { background: #dceeff; }
+
+.correction-dialog {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  background: #fff;
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  padding: 12px;
+  width: 320px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 100;
+}
+
+.correction-dialog p { margin: 0 0 8px; font-size: 0.9rem; }
+
+.correction-dialog .correction-text {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid #c9d3df;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.correction-dialog .correction-submit {
+  float: right;
+  padding: 6px 14px;
+  background: #4a90e2;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.correction-dialog .correction-submit:hover { background: #357abd; }

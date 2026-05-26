@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg2
 import redis
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +20,41 @@ from .auth import (
 from .conversation import ConversationStore
 from .llm import LLMService
 from .retrieval_client import RetrievalClient
-from .schemas import ChatRequest, ChatResponse, LoginRequest, LoginResponse, LogoutRequest
+from .schemas import ChatRequest, ChatResponse, LoginRequest, LoginResponse, LogoutRequest, RateRequest
 from .settings import Settings
+
+
+def _pg_url(db_url: str) -> str:
+    return db_url.replace("postgresql+psycopg2://", "postgresql://")
+
+
+def _save_interaction_sync(db_url: str, conversation_id: str, question: str, answer: str) -> int:
+    conn = psycopg2.connect(_pg_url(db_url))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_interactions (conversation_id, question, answer)"
+                " VALUES (%s, %s, %s) RETURNING id",
+                (conversation_id, question, answer),
+            )
+            row_id: int = cur.fetchone()[0]
+        conn.commit()
+        return row_id
+    finally:
+        conn.close()
+
+
+def _update_rating_sync(db_url: str, interaction_id: int, rating: str, correction: str | None) -> None:
+    conn = psycopg2.connect(_pg_url(db_url))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE chat_interactions SET rating = %s, correction = %s WHERE id = %s",
+                (rating, correction, interaction_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 _AGGREGATE_KEYWORDS = (
     "cuántos", "cuantos", "cuántas", "cuantas", "cuál es el total", "total de",
@@ -82,6 +117,7 @@ def create_app() -> FastAPI:
         dependencies=[Depends(verify_api_key), Depends(require_session)],
     )
     async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+        import asyncio
         retrieval: RetrievalClient = app.state.retrieval
         llm: LLMService = app.state.llm
         conversation: ConversationStore = app.state.conversation
@@ -93,7 +129,22 @@ def create_app() -> FastAPI:
         answer = await llm.answer(query=body.query, context=retrieve.context, history=history)
         conversation.append(conv_id, "user", body.query)
         conversation.append(conv_id, "assistant", answer)
-        return ChatResponse(answer=answer, sources=retrieve.sources, conversation_id=conv_id)
+        db_url = settings.database_url_sync.get_secret_value()
+        loop = asyncio.get_event_loop()
+        interaction_id = await loop.run_in_executor(
+            None, partial(_save_interaction_sync, db_url, conv_id, body.query, answer)
+        )
+        return ChatResponse(answer=answer, sources=retrieve.sources, conversation_id=conv_id, interaction_id=interaction_id)
+
+    @app.post("/rate", dependencies=[Depends(require_session)])
+    async def rate(body: RateRequest) -> dict[str, str]:
+        import asyncio
+        db_url = settings.database_url_sync.get_secret_value()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None, partial(_update_rating_sync, db_url, body.interaction_id, body.rating, body.correction)
+        )
+        return {"status": "ok"}
 
     @app.websocket("/ws/chat")
     async def ws_chat(ws: WebSocket) -> None:
@@ -129,10 +180,17 @@ def create_app() -> FastAPI:
                     await ws.send_json({"type": "token", "content": token_word + " "})
                 conversation.append(conv_id, "user", query)
                 conversation.append(conv_id, "assistant", answer)
+                import asyncio as _aio
+                db_url_ws = settings_ws.database_url_sync.get_secret_value()
+                ws_loop = _aio.get_event_loop()
+                interaction_id = await ws_loop.run_in_executor(
+                    None, partial(_save_interaction_sync, db_url_ws, conv_id, query, answer)
+                )
                 await ws.send_json(
                     {
                         "type": "done",
                         "conversation_id": conv_id,
+                        "interaction_id": interaction_id,
                         "sources": [item.model_dump() for item in retrieve.sources],
                     }
                 )

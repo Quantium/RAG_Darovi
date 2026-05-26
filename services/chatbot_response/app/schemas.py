@@ -25,6 +25,13 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[SourceReference]
     conversation_id: str
+    interaction_id: int
+
+
+class RateRequest(BaseModel):
+    interaction_id: int
+    rating: str
+    correction: Optional[str] = None
 
 
 class RetrieveResponse(BaseModel):
