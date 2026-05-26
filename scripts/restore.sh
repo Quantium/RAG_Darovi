@@ -3,6 +3,9 @@
 #
 # Usage:
 #   ./scripts/restore.sh backups/YYYYMMDD_HHMMSS
+#   ./scripts/restore.sh backups/YYYYMMDD_HHMMSS --only-postgres
+#   ./scripts/restore.sh backups/YYYYMMDD_HHMMSS --only-minio
+#   ./scripts/restore.sh backups/YYYYMMDD_HHMMSS --only-milvus
 #
 # What it restores (if the file is present in the backup directory):
 #   postgres.sql.gz              → PostgreSQL (drops existing data first)
@@ -15,9 +18,24 @@
 set -euo pipefail
 
 BACKUP_DIR="${1:-}"
+DO_POSTGRES=true
+DO_MINIO=true
+DO_MILVUS=true
+
+# Parse optional flags (everything after the backup dir)
+[[ $# -gt 0 ]] && shift
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --only-postgres)  DO_POSTGRES=true;  DO_MINIO=false;  DO_MILVUS=false; shift ;;
+        --only-minio)     DO_POSTGRES=false; DO_MINIO=true;   DO_MILVUS=false; shift ;;
+        --only-milvus)    DO_POSTGRES=false; DO_MINIO=false;  DO_MILVUS=true;  shift ;;
+        --only-fans)      echo "oh! you, nasty"; exit 0 ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+done
 
 if [[ -z "$BACKUP_DIR" ]]; then
-    echo "Usage: $0 <backup-dir>"
+    echo "Usage: $0 <backup-dir> [--only-postgres|--only-minio|--only-milvus]"
     echo "Example: $0 ./backups/20260524_220000"
     exit 1
 fi
@@ -38,7 +56,7 @@ echo "Starting restore..."
 echo ""
 
 # ── 1. PostgreSQL ─────────────────────────────────────────────────────────────
-if [[ -f "$BACKUP_DIR/postgres.sql.gz" ]]; then
+if [[ "$DO_POSTGRES" == "true" ]] && [[ -f "$BACKUP_DIR/postgres.sql.gz" ]]; then
     echo "[1] PostgreSQL restore..."
     # Terminate existing connections to allow DROP operations
     docker compose exec -T postgres psql -U postgres -c \
@@ -47,12 +65,14 @@ if [[ -f "$BACKUP_DIR/postgres.sql.gz" ]]; then
     gunzip -c "$BACKUP_DIR/postgres.sql.gz" \
         | docker compose exec -T postgres psql -U postgres -d rag_darovi -q
     echo "  OK  PostgreSQL restored"
+elif [[ "$DO_POSTGRES" == "false" ]]; then
+    echo "[1] Skipping PostgreSQL  (--only-* flag active)"
 else
     echo "  --  postgres.sql.gz not found, skipping"
 fi
 
 # ── 2. MinIO converted-texts ──────────────────────────────────────────────────
-if [[ -f "$BACKUP_DIR/minio_converted_texts.tar.gz" ]]; then
+if [[ "$DO_MINIO" == "true" ]] && [[ -f "$BACKUP_DIR/minio_converted_texts.tar.gz" ]]; then
     echo ""
     echo "[2] MinIO converted-texts restore..."
     DASH=$(docker compose ps -q dashboard-api)
@@ -77,13 +97,16 @@ print(f"  Restored {count} objects to {bucket}")
 PYEOF
     docker compose exec -T dashboard-api rm -f /tmp/cts-restore.tar.gz
     echo "  OK  converted-texts restored"
+elif [[ "$DO_MINIO" == "false" ]]; then
+    echo ""
+    echo "[2] Skipping MinIO texts  (--only-* flag active)"
 else
     echo ""
     echo "  --  minio_converted_texts.tar.gz not found, skipping"
 fi
 
 # ── 3. MinIO raw-files ────────────────────────────────────────────────────────
-if [[ -f "$BACKUP_DIR/minio_raw_files.tar.gz" ]]; then
+if [[ "$DO_MINIO" == "true" ]] && [[ -f "$BACKUP_DIR/minio_raw_files.tar.gz" ]]; then
     echo ""
     echo "[3] MinIO raw-files restore..."
     DASH=$(docker compose ps -q dashboard-api)
@@ -116,7 +139,7 @@ else
 fi
 
 # ── 4. Milvus vectors ─────────────────────────────────────────────────────────
-if [[ -f "$BACKUP_DIR/milvus_vectors.parquet" ]]; then
+if [[ "$DO_MILVUS" == "true" ]] && [[ -f "$BACKUP_DIR/milvus_vectors.parquet" ]]; then
     echo ""
     echo "[4] Milvus vector restore from parquet..."
 
@@ -212,6 +235,9 @@ PYEOF
 
     docker compose exec -T dashboard-api rm -f /tmp/milvus_restore.parquet
     echo "  OK  Milvus restored"
+elif [[ "$DO_MILVUS" == "false" ]]; then
+    echo ""
+    echo "[4] Skipping Milvus  (--only-* flag active)"
 else
     echo ""
     echo "  --  milvus_vectors.parquet not found, skipping"

@@ -20,7 +20,6 @@ _INGEST_NAMES = frozenset(
 _VECTOR_NAMES = frozenset(
     {
         "src.worker.tasks.embed_file",
-        "src.worker.tasks.poll_text_ready_for_embedding",
         "src.worker.tasks.vision_extract",
     }
 )

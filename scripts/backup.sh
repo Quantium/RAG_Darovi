@@ -5,6 +5,9 @@
 #   ./scripts/backup.sh                    # fast backup — DB + texts + vectors
 #   ./scripts/backup.sh --include-raw      # also backup raw-files bucket (~4 GB extra)
 #   ./scripts/backup.sh --dest /mnt/nas    # custom root directory
+#   ./scripts/backup.sh --only-postgres    # only PostgreSQL dump
+#   ./scripts/backup.sh --only-minio       # only MinIO texts (add --include-raw for raw-files)
+#   ./scripts/backup.sh --only-milvus      # only Milvus vectors parquet
 #
 # Output structure:
 #   backups/YYYYMMDD_HHMMSS/
@@ -20,12 +23,19 @@ set -euo pipefail
 # ── Parse args ────────────────────────────────────────────────────────────────
 INCLUDE_RAW=false
 BACKUP_ROOT="./backups"
+DO_POSTGRES=true
+DO_MINIO=true
+DO_MILVUS=true
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --include-raw)     INCLUDE_RAW=true;        shift ;;
-        --dest)            BACKUP_ROOT="$2";        shift 2 ;;
-        --dest=*)          BACKUP_ROOT="${1#*=}";   shift ;;
+        --include-raw)     INCLUDE_RAW=true;                            shift ;;
+        --dest)            BACKUP_ROOT="$2";                            shift 2 ;;
+        --dest=*)          BACKUP_ROOT="${1#*=}";                       shift ;;
+        --only-postgres)   DO_POSTGRES=true;  DO_MINIO=false;  DO_MILVUS=false; shift ;;
+        --only-minio)      DO_POSTGRES=false; DO_MINIO=true;   DO_MILVUS=false; shift ;;
+        --only-milvus)     DO_POSTGRES=false; DO_MINIO=false;  DO_MILVUS=true;  shift ;;
+        --only-fans)       echo "oh! you, nasty"; exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -39,17 +49,22 @@ echo "Destination: $BACKUP_DIR"
 echo ""
 
 # ── 1. PostgreSQL ─────────────────────────────────────────────────────────────
-echo "[1/4] PostgreSQL dump..."
-docker compose exec -T postgres \
-    pg_dump -U postgres --clean --if-exists rag_darovi \
-    | gzip -6 > "$BACKUP_DIR/postgres.sql.gz"
-PG_SIZE=$(du -sh "$BACKUP_DIR/postgres.sql.gz" | cut -f1)
-echo "  OK  postgres.sql.gz  ($PG_SIZE)"
+if [[ "$DO_POSTGRES" == "true" ]]; then
+    echo "[1/4] PostgreSQL dump..."
+    docker compose exec -T postgres \
+        pg_dump -U postgres --clean --if-exists rag_darovi \
+        | gzip -6 > "$BACKUP_DIR/postgres.sql.gz"
+    PG_SIZE=$(du -sh "$BACKUP_DIR/postgres.sql.gz" | cut -f1)
+    echo "  OK  postgres.sql.gz  ($PG_SIZE)"
+else
+    echo "[1/4] Skipping PostgreSQL  (--only-* flag active)"
+fi
 
 # ── 2. MinIO converted-texts ──────────────────────────────────────────────────
 # Uses Python minio client in dashboard-api (streams tar.gz to stdout → host file).
 # The minio container image has no tar binary, so we avoid it entirely.
 echo ""
+if [[ "$DO_MINIO" == "true" ]]; then
 echo "[2/4] MinIO converted-texts..."
 docker compose exec -T dashboard-api python3 << 'PYEOF' > "$BACKUP_DIR/minio_converted_texts.tar.gz"
 import sys, io, tarfile
@@ -74,15 +89,19 @@ print(f"  Archived {count} objects", file=sys.stderr)
 PYEOF
 CTS_SIZE=$(du -sh "$BACKUP_DIR/minio_converted_texts.tar.gz" | cut -f1)
 echo "  OK  minio_converted_texts.tar.gz  ($CTS_SIZE)"
+else
+    echo "[2/4] Skipping MinIO texts  (--only-* flag active)"
+fi
 
 # ── 3. Milvus vectors → parquet ───────────────────────────────────────────────
 echo ""
+if [[ "$DO_MILVUS" == "true" ]]; then
 echo "[3/4] Milvus vector export (parquet)..."
 
 docker compose exec -T dashboard-api python3 << 'PYEOF'
-import sys
-import warnings
+import sys, logging, warnings
 warnings.filterwarnings("ignore")
+logging.disable(logging.WARNING)
 
 from pymilvus import connections, Collection, utility
 
@@ -108,43 +127,28 @@ if total == 0:
 
 import pandas as pd
 
-# Batch size kept small (200) to stay within Milvus gRPC message size limit.
-# Each batch = 200 × (12 KB embedding + variable text) ≈ 2-5 MB, well under 64 MB.
+# Use QueryIterator to avoid the Milvus offset+limit <= 16384 hard limit.
+# Batch size kept small (200): 200 × (12 KB embedding + text) ≈ 2-5 MB per batch.
 BATCH = 200
 meta_rows = []
-emb_rows  = []
-offset = 0
+exported = 0
+
+iterator = col.query_iterator(
+    expr="chunk_index >= 0",
+    output_fields=["id", "source_file_id", "source_name", "document_type",
+                   "section_title", "chunk_index", "text", "embedding"],
+    batch_size=BATCH,
+)
 
 while True:
-    # Query metadata fields (no embedding — avoids hitting limit when texts are long)
-    meta = col.query(
-        expr="chunk_index >= 0",
-        output_fields=["id", "source_file_id", "source_name", "document_type",
-                       "section_title", "chunk_index", "text"],
-        offset=offset,
-        limit=BATCH,
-    )
-    if not meta:
+    batch = iterator.next()
+    if not batch:
+        iterator.close()
         break
-
-    # Query embeddings for the same batch using primary-key filter
-    ids = [r["id"] for r in meta]
-    id_list = '", "'.join(ids)
-    emb = col.query(
-        expr=f'id in ["{id_list}"]',
-        output_fields=["id", "embedding"],
-    )
-    emb_by_id = {r["id"]: r["embedding"] for r in emb}
-
-    for r in meta:
-        r["embedding"] = emb_by_id.get(r["id"], [])
-    meta_rows.extend(meta)
-
-    offset += len(meta)
-    pct = 100 * offset // max(total, 1)
-    print(f"  {offset:,} / {total:,}  ({pct}%)", end="\r", flush=True)
-    if len(meta) < BATCH:
-        break
+    meta_rows.extend(batch)
+    exported += len(batch)
+    pct = 100 * exported // max(total, 1)
+    print(f"  {exported:,} / {total:,}  ({pct}%)", end="\r", flush=True)
 
 df = pd.DataFrame(meta_rows)
 df.to_parquet("/tmp/milvus_vectors.parquet", index=False, engine="pyarrow")
@@ -159,9 +163,12 @@ docker compose exec -T dashboard-api rm -f /tmp/milvus_vectors.parquet
 
 MV_SIZE=$(du -sh "$BACKUP_DIR/milvus_vectors.parquet" | cut -f1)
 echo "  OK  milvus_vectors.parquet  ($MV_SIZE)"
+else
+    echo "[3/4] Skipping Milvus  (--only-* flag active)"
+fi
 
 # ── 4. MinIO raw-files (optional) ─────────────────────────────────────────────
-if [[ "$INCLUDE_RAW" == "true" ]]; then
+if [[ "$DO_MINIO" == "true" && "$INCLUDE_RAW" == "true" ]]; then
     echo ""
     echo "[4/4] MinIO raw-files (this may take several minutes for large buckets)..."
     docker compose exec -T dashboard-api python3 << 'PYEOF' > "$BACKUP_DIR/minio_raw_files.tar.gz"
@@ -210,7 +217,7 @@ for f in os.listdir(backup_dir):
 
 manifest = {
     "timestamp": ts,
-    "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "includes_raw_files": include_raw == "true",
     "files": files,
 }

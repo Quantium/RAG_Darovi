@@ -123,12 +123,27 @@ async def dashboard_state(request: Request) -> DashboardState:
         else None
     )
 
+    r = request.app.state.redis_cache
+    ingest_paused = bool(r.exists("rag:pause:ingest"))
+    transform_paused = bool(r.exists("rag:pause:transform"))
+    vectorize_paused = bool(r.exists("rag:pause:vectorize"))
+
+    if ingest_paused:
+        ingest_processing = False
+    if transform_paused:
+        transform_processing = False
+    if vectorize_paused:
+        vectorize_processing = False
+
     return DashboardState(
         cards=cards,
         source_url=source_url,
         ingest_processing=ingest_processing,
         transform_processing=transform_processing,
         vectorize_processing=vectorize_processing,
+        ingest_paused=ingest_paused,
+        transform_paused=transform_paused,
+        vectorize_paused=vectorize_paused,
         transform_inflight_file=transform_inflight_file,
         milvus_inflight_file=milvus_inflight_file,
         updated_at=datetime.now(timezone.utc),
@@ -367,3 +382,69 @@ async def dashboard_erase_all(request: Request) -> DashboardActionResult:
         ),
         job_ids=[],
     )
+
+
+@dashboard_router.post(
+    "/dashboard/ingest_pause",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_ingest_pause(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.set("rag:pause:ingest", "1")
+    logger.info("dashboard.pause", stage="ingest")
+    return DashboardActionResult(status="ok", detail="Ingest pipeline paused.", job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/ingest_resume",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_ingest_resume(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.delete("rag:pause:ingest")
+    logger.info("dashboard.resume", stage="ingest")
+    return DashboardActionResult(status="ok", detail="Ingest pipeline resumed.", job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/transform_pause",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_transform_pause(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.set("rag:pause:transform", "1")
+    logger.info("dashboard.pause", stage="transform")
+    return DashboardActionResult(status="ok", detail="Transform pipeline paused.", job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/transform_resume",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_transform_resume(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.delete("rag:pause:transform")
+    logger.info("dashboard.resume", stage="transform")
+    return DashboardActionResult(status="ok", detail="Transform pipeline resumed.", job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/vectorize_pause",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_vectorize_pause(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.set("rag:pause:vectorize", "1")
+    logger.info("dashboard.pause", stage="vectorize")
+    return DashboardActionResult(status="ok", detail="Vectorize pipeline paused.", job_ids=[])
+
+
+@dashboard_router.post(
+    "/dashboard/vectorize_resume",
+    response_model=DashboardActionResult,
+    dependencies=[Depends(verify_api_key)],
+)
+async def dashboard_vectorize_resume(request: Request) -> DashboardActionResult:
+    request.app.state.redis_cache.delete("rag:pause:vectorize")
+    logger.info("dashboard.resume", stage="vectorize")
+    return DashboardActionResult(status="ok", detail="Vectorize pipeline resumed.", job_ids=[])

@@ -53,6 +53,9 @@ class DashboardState(BaseModel):
     ingest_processing: bool = False
     transform_processing: bool = False
     vectorize_processing: bool = False
+    ingest_paused: bool = False
+    transform_paused: bool = False
+    vectorize_paused: bool = False
     transform_inflight_file: InFlightFile | None = None
     milvus_inflight_file: InFlightFile | None = None
     updated_at: datetime

@@ -26,9 +26,6 @@ strict = true
 module = [
     "pymilvus",
     "celery",
-    "googleapiclient.*",
-    "google.auth",
-    "google.auth.*",
     "pytesseract",
     "gspread",
     "yaml",
@@ -41,15 +38,12 @@ module = [
     "src.worker.tasks",
     "src.worker.celery_app",
     "src.scheduler.pipeline",
-    "src.drive.auth",
-    "src.drive.downloader",
     "src.drive.local_downloader",
     "src.vectorizer.milvus_store",
     "src.converter.pdf_converter",
     "src.vision.client",
     "src.vision.circuit_breaker",
     "src.vision.image_utils",
-    "src.api.drive_routes",
     "src.metadata.repository",
 ]
 disable_error_code = [

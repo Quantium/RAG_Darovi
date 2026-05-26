@@ -50,107 +50,10 @@ body {
 }
 
 #chat-shell[hidden],
-.onboarding-panel[hidden],
 #dashboard-panel[hidden],
 #document-status-panel[hidden],
 #raw-data-panel[hidden] {
     display: none !important;
-}
-
-.onboarding-panel {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
-}
-
-.onboarding-card {
-    max-width: 28rem;
-    width: 100%;
-    padding: 1.5rem;
-    border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    background-color: var(--header-bg);
-}
-
-.onboarding-title {
-    font-size: 1.125rem;
-    margin-bottom: 0.75rem;
-}
-
-.onboarding-message {
-    font-size: 0.875rem;
-    line-height: 1.5;
-    opacity: 0.9;
-    margin-bottom: 1rem;
-}
-
-.onboarding-btn {
-    display: inline-block;
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    text-decoration: none;
-    font-weight: 600;
-    border: 1px solid var(--border);
-}
-
-.onboarding-btn--primary {
-    background-color: var(--accent);
-    color: white;
-    border-color: var(--accent);
-}
-
-.folder-list {
-    list-style: none;
-    margin-top: 0.75rem;
-    max-height: 12rem;
-    overflow-y: auto;
-}
-
-.folder-list li {
-    margin-bottom: 0.35rem;
-}
-
-.folder-item-btn {
-    width: 100%;
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: 0.375rem;
-    background: var(--bg);
-    color: var(--text);
-    cursor: pointer;
-}
-
-.folder-item-btn:hover {
-    background-color: var(--sidebar-bg);
-}
-
-.onboarding-error {
-    color: #ef4444;
-    font-size: 0.875rem;
-}
-
-.onboarding-progress {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-top: 1rem;
-}
-
-.onboarding-progress__spinner {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: chat-status-spin 0.65s linear infinite;
-}
-
-.onboarding-progress__label {
-    font-size: 0.875rem;
-    margin: 0;
 }
 
 header {
@@ -809,6 +712,13 @@ footer {
     50% { opacity: 0.35; }
 }
 
+.elapsed-time {
+    color: #3b82f6;
+    font-variant-numeric: tabular-nums;
+    font-family: monospace;
+    margin-left: 4px;
+}
+
 .dash-card .danger {
     background: #ef4444;
     color: white;
@@ -820,6 +730,26 @@ footer {
 }
 
 .dash-card .danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dash-card .btn-pause-play {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+
+.dash-card .btn-pause-play[data-paused="true"] {
+    background: #10b981;
+}
+
+.dash-card .btn-pause-play:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

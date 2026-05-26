@@ -8,20 +8,7 @@
 </head>
 <body>
     <div id="app">
-        <section id="onboarding-panel" class="onboarding-panel">
-            <div class="onboarding-card">
-                <h2 class="onboarding-title">Set up Google Drive</h2>
-                <p id="onboarding-message" class="onboarding-message">Loading…</p>
-                <div id="onboarding-actions"></div>
-                <ul id="folder-list" class="folder-list" hidden></ul>
-                <div id="onboarding-progress" class="onboarding-progress" hidden>
-                    <div class="onboarding-progress__spinner" aria-hidden="true"></div>
-                    <p id="onboarding-progress-label" class="onboarding-progress__label"></p>
-                </div>
-            </div>
-        </section>
-
-        <div id="chat-shell" hidden>
+        <div id="chat-shell">
         <header>
             <div class="header-content">
                 <h1>RAG Darovi</h1>
@@ -51,6 +38,7 @@
                     <div class="dash-metrics" id="dash-metrics-raw"></div>
                     <p class="dash-source"><a id="dash-source-url" href="#" target="_blank" rel="noopener">Source</a></p>
                     <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-ingest"></span><span id="label-ingest">Idle</span></div>
+                    <button type="button" class="btn-pause-play" id="btn-pause-ingest" data-paused="false">⏸ Pause</button>
                     <button type="button" class="danger btn-re-ingest">Re-ingest</button>
                 </article>
                 <article class="dash-card" id="dash-card-transform">
@@ -59,6 +47,7 @@
                     <p class="dash-card-desc">Text extraction (extract_text)</p>
                     <div class="dash-metrics" id="dash-metrics-transform"></div>
                     <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-transform"></span><span id="label-transform">Idle</span></div>
+                    <button type="button" class="btn-pause-play" id="btn-pause-transform" data-paused="false">⏸ Pause</button>
                     <button type="button" class="btn-run-transform">Run now</button>
                     <button type="button" class="danger btn-re-transform">Re-transform</button>
                 </article>
@@ -76,6 +65,7 @@
                     <p class="dash-card-desc">Vector index</p>
                     <div class="dash-metrics" id="dash-metrics-milvus"></div>
                     <div class="dash-row"><span class="processing-dot" data-state="idle" id="dot-vectorize"></span><span id="label-vectorize">Idle</span></div>
+                    <button type="button" class="btn-pause-play" id="btn-pause-vectorize" data-paused="false">⏸ Pause</button>
                     <button type="button" class="danger btn-re-vectorize">Re-vectorize</button>
                 </article>
                 <article class="dash-card" id="dash-card-sessions">

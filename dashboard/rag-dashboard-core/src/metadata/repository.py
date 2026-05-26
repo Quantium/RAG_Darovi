@@ -76,23 +76,12 @@ FILE_RECORD_SCHEMA_COLUMNS: set[str] = {
 
 
 class SyncState(Base):
-    """Stores the Google Drive changes.list page token for incremental sync."""
+    """Stores a snapshot token used by the local folder syncer for incremental change detection."""
 
     __tablename__ = "sync_state"
 
     key: Mapped[str] = mapped_column(String, primary_key=True, default="drive_page_token")
     value: Mapped[str] = mapped_column(String, nullable=False, default="")
-
-
-class DriveConnection(Base):
-    """Single-tenant Google OAuth connection (one row)."""
-
-    __tablename__ = "drive_connection"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    refresh_token_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    selected_folder_id: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ExtractedDocument(Base):
@@ -291,32 +280,6 @@ class MetadataRepository:
 
     async def delete_all_file_records(self) -> None:
         await self._session.execute(delete(FileRecord))
-        await self._session.commit()
-
-    async def get_drive_connection(self) -> DriveConnection | None:
-        result = await self._session.execute(select(DriveConnection).limit(1))
-        return result.scalar_one_or_none()
-
-    async def save_drive_oauth_token(self, refresh_token_enc: str) -> None:
-        row = await self.get_drive_connection()
-        now = datetime.now(timezone.utc)
-        if row is None:
-            row = DriveConnection(refresh_token_enc=refresh_token_enc, selected_folder_id="", updated_at=now)
-            self._session.add(row)
-        else:
-            row.refresh_token_enc = refresh_token_enc
-            row.updated_at = now
-        await self._session.commit()
-
-    async def set_drive_selected_folder(self, folder_id: str) -> None:
-        row = await self.get_drive_connection()
-        now = datetime.now(timezone.utc)
-        if row is None:
-            row = DriveConnection(refresh_token_enc="", selected_folder_id=folder_id, updated_at=now)
-            self._session.add(row)
-        else:
-            row.selected_folder_id = folder_id
-            row.updated_at = now
         await self._session.commit()
 
     async def upsert_extracted_document(
@@ -717,9 +680,6 @@ class SyncMetadataRepository:
 
     async def delete_file_record(self, drive_file_id: str) -> None:
         self.delete_file_record_sync(drive_file_id)
-
-    def get_drive_connection_sync(self) -> DriveConnection | None:
-        return self._session.execute(select(DriveConnection).limit(1)).scalar_one_or_none()
 
     def delete_all_file_records_sync(self) -> None:
         self._session.execute(delete(FileRecord))

@@ -49,6 +49,10 @@ def run_incremental_sync(self):
         return
     r = redis.Redis.from_url(settings.redis_broker_url)
 
+    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:ingest"):
+        task_logger.info("sync.skipped_paused", reason="ingest paused")
+        return
+
     if not r.set(SYNC_LOCK_KEY, "1", nx=True, ex=SYNC_LOCK_TTL):
         task_logger.warning("sync.skipped_concurrent", reason="Another sync is already running")
         return
@@ -86,6 +90,10 @@ def download_file(self, file_meta: dict) -> dict:
     task_logger.info("task.started")
 
     settings = build_settings()
+    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:ingest"):
+        task_logger.info("task.skipped", reason="ingest paused")
+        return {"skipped": True, "drive_file_id": file_meta["id"]}
+
     storage = build_storage(settings)
     repo, cleanup = build_metadata_repo(settings)
 
@@ -136,6 +144,9 @@ def convert_file(self, download_result: dict) -> dict:
     from src.converter import get_converter
 
     settings = build_settings()
+    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:transform"):
+        task_logger.info("task.skipped", reason="transform paused")
+        return {"skipped": True, "drive_file_id": drive_file_id}
     storage = build_storage(settings)
     repo, cleanup = build_metadata_repo(settings)
 
@@ -207,6 +218,10 @@ def embed_file(self, convert_result: dict) -> dict:
         return convert_result
 
     settings = build_settings()
+    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:vectorize"):
+        task_logger.info("task.skipped", reason="vectorize paused")
+        return {"skipped": True, "drive_file_id": drive_file_id}
+
     storage = build_storage(settings)
 
     try:
@@ -832,6 +847,10 @@ def poll_text_ready_for_embedding(self):
     task_logger = logger.bind(trace_id=trace_id, task="poll_text_ready_for_embedding")
 
     settings = build_settings()
+    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:vectorize"):
+        task_logger.info("poll.skipped_paused", reason="vectorize paused")
+        return
+
     repo, cleanup = build_metadata_repo(settings)
     queued = 0
     skipped = 0

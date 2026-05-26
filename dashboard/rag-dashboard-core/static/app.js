@@ -14,13 +14,13 @@ const state = {
     ingestRunning: false,
     ingestPollTimer: null,
     dashboardPollTimer: null,
+    elapsedTimerInterval: null,
+    processingStartTimes: { ingest: null, transform: null, vectorize: null },
 };
 
 const themeToggle = document.getElementById("theme-toggle");
 const statusIndicator = document.getElementById("status-indicator");
 const statusText = document.getElementById("status-text");
-const onboardingPanel = document.getElementById("onboarding-panel");
-const chatShell = document.getElementById("chat-shell");
 const tabDashboard = document.getElementById("tab-dashboard");
 const tabDocumentStatus = document.getElementById("tab-document-status");
 const tabRawData = document.getElementById("tab-raw-data");
@@ -63,7 +63,6 @@ function apiHeaders(jsonBody = false, dashboardConfirm = false) {
 }
 
 let statusPollStarted = false;
-let bootstrapPollTimer = null;
 
 function escapeHtml(text) {
     return String(text ?? "")
@@ -480,6 +479,46 @@ function inflightFileRow(file) {
     return `<div class="dash-inflight-file">${nameHtml}</div>`;
 }
 
+function formatElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+
+function updatePauseButton(btnId, isPaused) {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.dataset.paused = isPaused ? "true" : "false";
+    btn.textContent = isPaused ? "▶ Resume" : "⏸ Pause";
+}
+
+function setProcessingLabel(el, key, isProcessing) {
+    if (!el) return;
+    if (isProcessing) {
+        if (state.processingStartTimes[key] === null) state.processingStartTimes[key] = Date.now();
+        const elapsed = formatElapsed(Date.now() - state.processingStartTimes[key]);
+        el.innerHTML = `Processing <span class="elapsed-time">${elapsed}</span>`;
+    } else {
+        state.processingStartTimes[key] = null;
+        el.textContent = "Idle";
+    }
+}
+
+function updateElapsedLabels() {
+    const now = Date.now();
+    for (const [key, id] of [["ingest", "label-ingest"], ["transform", "label-transform"], ["vectorize", "label-vectorize"]]) {
+        if (state.processingStartTimes[key] !== null) {
+            const el = document.getElementById(id);
+            if (el) {
+                const elapsed = formatElapsed(now - state.processingStartTimes[key]);
+                el.innerHTML = `Processing <span class="elapsed-time">${elapsed}</span>`;
+            }
+        }
+    }
+}
+
 async function loadDashboard() {
     const elRaw = document.getElementById("dash-metrics-raw");
     const elTf = document.getElementById("dash-metrics-transform");
@@ -550,12 +589,9 @@ async function loadDashboard() {
         if (dotV) {
             dotV.setAttribute("data-state", data.vectorize_processing ? "running" : "idle");
         }
-        const li = document.getElementById("label-ingest");
-        const lt = document.getElementById("label-transform");
-        const lv = document.getElementById("label-vectorize");
-        if (li) li.textContent = data.ingest_processing ? "Processing" : "Idle";
-        if (lt) lt.textContent = data.transform_processing ? "Processing" : "Idle";
-        if (lv) lv.textContent = data.vectorize_processing ? "Processing" : "Idle";
+        setProcessingLabel(document.getElementById("label-ingest"), "ingest", data.ingest_processing);
+        setProcessingLabel(document.getElementById("label-transform"), "transform", data.transform_processing);
+        setProcessingLabel(document.getElementById("label-vectorize"), "vectorize", data.vectorize_processing);
 
         const iconRaw = document.getElementById("file-icon-raw");
         const iconTf = document.getElementById("file-icon-transform");
@@ -563,6 +599,10 @@ async function loadDashboard() {
         if (iconRaw) iconRaw.classList.toggle("is-blinking", !!data.ingest_processing);
         if (iconTf) iconTf.classList.toggle("is-blinking", !!data.transform_processing);
         if (iconMv) iconMv.classList.toggle("is-blinking", !!data.vectorize_processing);
+
+        updatePauseButton("btn-pause-ingest", !!data.ingest_paused);
+        updatePauseButton("btn-pause-transform", !!data.transform_paused);
+        updatePauseButton("btn-pause-vectorize", !!data.vectorize_paused);
 
         if (updated && data.updated_at) {
             updated.textContent = `Updated: ${data.updated_at}`;
@@ -696,9 +736,15 @@ function setActiveTab(nextTab) {
         state.dashboardPollTimer = setInterval(() => {
             loadDashboard().catch((err) => console.error("dashboard poll", err));
         }, 5000);
+        if (state.elapsedTimerInterval) clearInterval(state.elapsedTimerInterval);
+        state.elapsedTimerInterval = setInterval(updateElapsedLabels, 1000);
     } else if (state.dashboardPollTimer) {
         clearInterval(state.dashboardPollTimer);
         state.dashboardPollTimer = null;
+        if (state.elapsedTimerInterval) {
+            clearInterval(state.elapsedTimerInterval);
+            state.elapsedTimerInterval = null;
+        }
     }
 }
 
@@ -801,6 +847,27 @@ rawDataTable?.querySelector("thead")?.addEventListener("click", (e) => {
     state.rawDataPage = 1;
     refreshRawDataTable();
 });
+
+async function togglePause(stage) {
+    const btn = document.getElementById(`btn-pause-${stage}`);
+    if (!btn) return;
+    const isPaused = btn.dataset.paused === "true";
+    const endpoint = isPaused ? `/dashboard/${stage}_resume` : `/dashboard/${stage}_pause`;
+    btn.disabled = true;
+    try {
+        const res = await fetch(endpoint, { method: "POST", headers: apiHeaders() });
+        if (!res.ok) throw new Error(await res.text());
+        await loadDashboard();
+    } catch (e) {
+        alert(e.message || String(e));
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+document.getElementById("btn-pause-ingest")?.addEventListener("click", () => togglePause("ingest"));
+document.getElementById("btn-pause-transform")?.addEventListener("click", () => togglePause("transform"));
+document.getElementById("btn-pause-vectorize")?.addEventListener("click", () => togglePause("vectorize"));
 
 document.querySelector("#dash-card-raw .btn-re-ingest")?.addEventListener("click", async () => {
     if (!confirm("Re-ingest: clear MinIO RAW and reset pipeline rows. Continue?")) return;
@@ -909,131 +976,7 @@ async function pollStatus() {
     }
 }
 
-async function fetchBootstrap() {
-    const res = await fetch("/drive/bootstrap", { credentials: "include", headers: apiHeaders() });
-    if (!res.ok) throw new Error(`bootstrap ${res.status}`);
-    return res.json();
-}
-
-function renderOnboarding(b) {
-    if (b.ingest_source === "local") {
-        showMainApp();
-        return;
-    }
-
-    onboardingPanel.hidden = false;
-    chatShell.hidden = true;
-    const msg = document.getElementById("onboarding-message");
-    const actions = document.getElementById("onboarding-actions");
-    const folderList = document.getElementById("folder-list");
-    const progress = document.getElementById("onboarding-progress");
-    actions.innerHTML = "";
-    folderList.hidden = true;
-    progress.hidden = true;
-    folderList.innerHTML = "";
-
-    if (!b.oauth_configured && !b.service_account_ready) {
-        msg.textContent =
-            "Configure Google Drive: set GOOGLE_OAUTH_CLIENT_ID for browser sign-in, or GOOGLE_APPLICATION_CREDENTIALS plus DRIVE_FOLDER_ID for a service account.";
-        return;
-    }
-
-    if (b.oauth_configured && b.onboarding_phase === "disconnected") {
-        msg.textContent = "Connect your Google account (read-only) to choose a folder to index.";
-        const a = document.createElement("a");
-        a.href = "/auth/google/start";
-        a.className = "onboarding-btn onboarding-btn--primary";
-        a.textContent = "Connect Google Drive";
-        actions.appendChild(a);
-        return;
-    }
-
-    if (b.oauth_configured && b.onboarding_phase === "awaiting_folder") {
-        msg.textContent = "Select a folder to index:";
-        loadFolderList();
-        return;
-    }
-
-    progress.hidden = false;
-    const labels = {
-        downloading: "Downloading files from Drive…",
-        preparing: "Preparing documents…",
-        embedding: "Embedding into the vector index…",
-        ready: "Finishing…",
-        error: "Pipeline error. Check logs or /status.",
-    };
-    document.getElementById("onboarding-progress-label").textContent =
-        labels[b.onboarding_phase] || b.onboarding_phase;
-}
-
-async function loadFolderList() {
-    const folderList = document.getElementById("folder-list");
-    folderList.hidden = false;
-    folderList.innerHTML = "<li>Loading…</li>";
-    try {
-        const res = await fetch("/drive/folders?parent_id=root", { credentials: "include", headers: apiHeaders() });
-        if (!res.ok) throw new Error(await res.text());
-        const folders = await res.json();
-        folderList.innerHTML = "";
-        folders.forEach((f) => {
-            const li = document.createElement("li");
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "folder-item-btn";
-            btn.textContent = f.name || f.id;
-            btn.onclick = () => {
-                selectFolder(f.id).catch((err) => {
-                    folderList.innerHTML = `<li class="onboarding-error">${String(err.message || err)}</li>`;
-                });
-            };
-            li.appendChild(btn);
-            folderList.appendChild(li);
-        });
-        if (folders.length === 0) {
-            folderList.innerHTML = "<li>No folders found in Drive root.</li>";
-        }
-    } catch (e) {
-        folderList.innerHTML = `<li class="onboarding-error">${String(e.message)}</li>`;
-    }
-}
-
-async function selectFolder(folderId) {
-    const res = await fetch("/drive/select-folder", {
-        method: "POST",
-        credentials: "include",
-        headers: apiHeaders(true),
-        body: JSON.stringify({ folder_id: folderId }),
-    });
-    if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || res.statusText);
-    }
-    const b = await fetchBootstrap();
-    renderOnboarding({ ...b, onboarding_phase: b.onboarding_phase || "downloading" });
-    startBootstrapPoll();
-}
-
-function startBootstrapPoll() {
-    if (bootstrapPollTimer) clearInterval(bootstrapPollTimer);
-    bootstrapPollTimer = setInterval(async () => {
-        try {
-            const b = await fetchBootstrap();
-            if (b.chat_ready) {
-                clearInterval(bootstrapPollTimer);
-                bootstrapPollTimer = null;
-                showMainApp();
-            } else {
-                renderOnboarding(b);
-            }
-        } catch (e) {
-            console.error("bootstrap poll", e);
-        }
-    }, 2000);
-}
-
 function showMainApp() {
-    if (onboardingPanel) onboardingPanel.hidden = true;
-    if (chatShell) chatShell.hidden = false;
     setActiveTab("dashboard");
     if (!statusPollStarted) {
         statusPollStarted = true;
@@ -1042,24 +985,4 @@ function showMainApp() {
     }
 }
 
-async function initApp() {
-    try {
-        const b = await fetchBootstrap();
-        if (b.ingest_source === "local" || b.chat_ready) {
-            showMainApp();
-        } else {
-            renderOnboarding(b);
-            if (
-                b.folder_selected &&
-                ["downloading", "preparing", "embedding", "error"].includes(b.onboarding_phase)
-            ) {
-                startBootstrapPoll();
-            }
-        }
-    } catch (e) {
-        console.warn("Drive bootstrap unavailable, showing main app:", e);
-        showMainApp();
-    }
-}
-
-initApp();
+showMainApp();

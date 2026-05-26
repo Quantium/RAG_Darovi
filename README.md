@@ -512,6 +512,11 @@ The backup script saves three artifacts to `backups/YYYYMMDD_HHMMSS/`:
 
 # Custom destination
 ./scripts/backup.sh --dest /mnt/nas/darovi-backups
+
+# Selective backup — only one component
+./scripts/backup.sh --only-postgres
+./scripts/backup.sh --only-minio
+./scripts/backup.sh --only-milvus
 ```
 
 ### Restore
@@ -519,6 +524,11 @@ The backup script saves three artifacts to `backups/YYYYMMDD_HHMMSS/`:
 ```bash
 # Restore from a backup directory (prompts for confirmation, then overwrites data)
 ./scripts/restore.sh backups/20260524_220000
+
+# Selective restore — only one component from a full backup
+./scripts/restore.sh backups/20260524_220000 --only-postgres
+./scripts/restore.sh backups/20260524_220000 --only-minio
+./scripts/restore.sh backups/20260524_220000 --only-milvus
 ```
 
 The restore script:
