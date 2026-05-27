@@ -42,16 +42,10 @@ RAG Darovi acts like a very fast, very thorough research assistant that:
 2. **Understands the content** at a semantic level — not just keyword search, but meaning
 3. **Answers your questions** in plain language, citing the exact documents and pages it used
 
-```mermaid
-flowchart LR
-    A["📁 LABORATORIOS folder\n(PDFs, images, docs)"] --> B["🤖 Platform reads\nevery file automatically"]
-    B --> C["🧠 Knowledge Base\n(vector database)"]
-    C --> D["💬 You ask questions\nin plain language"]
-    D --> E["✅ Answers with\nsource citations"]
-
-    style A fill:#e8f4fd,stroke:#2980b9
-    style C fill:#e8f5e9,stroke:#27ae60
-    style E fill:#fef9e7,stroke:#f39c12
+```
+  LABORATORIOS/         Platform reads         Knowledge Base        You ask             Answers with
+  (PDFs, images,  ──▶   every file        ──▶  (vector database) ──▶ questions      ──▶ source citations
+  docs)                 automatically                                 in plain language
 ```
 
 ### Who is this for?
@@ -140,88 +134,90 @@ If you added many new documents or the vector database was reset, click **Re-Vec
 
 This diagram shows every stage a document passes through, from file detection to appearing as a source in chat.
 
-```mermaid
-flowchart TD
-    subgraph Stage1["📥 Stage 1 — Ingestion (ingest_raw)"]
-        S1A["File placed in\nLABORATORIOS/"]
-        S1B["SHA-256 checksum\ncalculated"]
-        S1C["File uploaded to\nMinIO raw-files bucket"]
-        S1D["Record created in\nPostgreSQL file_records\nraw_status = 'synced'"]
-        S1A --> S1B --> S1C --> S1D
-    end
-
-    subgraph Stage2["📝 Stage 2 — Text Extraction (extract_text)"]
-        S2A["Read file from\nMinIO RAW"]
-        S2B{"File type?"}
-        S2C["pdfplumber extracts\ndigital text layer"]
-        S2D["python-docx / openpyxl\nextracts structured text"]
-        S2E{"Text quality\ncheck"}
-        S2F["Quality OK\n→ save text to\nMinIO converted-texts"]
-        S2G["Low quality / scanned\n→ vision_pending status"]
-        S2A --> S2B
-        S2B -->|PDF| S2C
-        S2B -->|DOCX/XLSX| S2D
-        S2C --> S2E
-        S2D --> S2F
-        S2E -->|Pass| S2F
-        S2E -->|Fail| S2G
-        S2F --> S2H["text_status =\n'ready_for_embedding'"]
-    end
-
-    subgraph Stage2V["👁️ Stage 2b — Vision OCR (dashboard-worker-vision)"]
-        S2VA["GPT-4o reads\npage image"]
-        S2VB["Structured text +\nkey-value pairs extracted"]
-        S2VC["Saved to\nMinIO converted-texts"]
-        S2VD["text_status =\n'ready_for_embedding'"]
-        S2VA --> S2VB --> S2VC --> S2VD
-    end
-
-    subgraph Stage3["🧮 Stage 3 — Embedding (dashboard-worker)"]
-        S3A["Celery beat polls\nready_for_embedding rows"]
-        S3B["Text split into chunks\n(~500 tokens each)"]
-        S3C["OpenAI API converts\neach chunk to 3072 numbers\n(text-embedding-3-large)"]
-        S3D["Vectors + metadata stored\nin Milvus collection\n(HNSW COSINE index)"]
-        S3E["status = 'embedded'\nchunk_count updated"]
-        S3A --> S3B --> S3C --> S3D --> S3E
-    end
-
-    subgraph Stage4["💬 Stage 4 — Retrieval & Chat"]
-        S4A["User types question"]
-        S4B["OpenAI embeds\nthe question\n→ 3072-dim vector"]
-        S4C["Milvus COSINE search\nfinds top-5 closest chunks"]
-        S4D["DeepSeek LLM\nreads chunks + question\nwrites answer"]
-        S4E["Answer + source\ncitations returned"]
-        S4A --> S4B --> S4C --> S4D --> S4E
-    end
-
-    Stage1 --> Stage2
-    Stage2 --> Stage3
-    S2G --> Stage2V
-    Stage2V --> Stage3
-    Stage3 --> Stage4
+```
+ ┌──────────────────────── Stage 1 — Ingestion (ingest_raw) ───────────────────────────┐
+ │                                                                                      │
+ │  File in LABORATORIOS/  ──▶  SHA-256 checksum  ──▶  MinIO raw-files  ──▶  PostgreSQL│
+ │                                 calculated             upload           raw_status   │
+ │                                                                         = 'synced'   │
+ └──────────────────────────────────────────────────────────────┬───────────────────────┘
+                                                                │
+                                                                ▼
+ ┌──────────────────────── Stage 2 — Text Extraction (extract_text) ───────────────────┐
+ │                                                                                      │
+ │  Read file        ┌── PDF ──▶ pdfplumber extracts text layer                        │
+ │  from MinIO ──▶  ─┤                        │                                        │
+ │                   └── DOCX/XLSX ──▶ python-docx / openpyxl                          │
+ │                                         │                                            │
+ │                                 Text quality check                                  │
+ │                                 ┌────────┴─────────┐                                │
+ │                              OK │                  │ Low quality / scanned           │
+ │                                 ▼                  ▼                                │
+ │                       MinIO converted-texts   vision_pending ──────────────────────── ──▶ Stage 2b
+ │                                 │                                                    │
+ │                     text_status = 'ready_for_embedding'                              │
+ └──────────────────────────────────────────────────────────────┬───────────────────────┘
+                                                                │
+                       ┌────────────────────────────────────────┘
+                       │
+                       │  ┌─── Stage 2b — Vision OCR (dashboard-worker-vision) ──────────┐
+                       │  │                                                               │
+                       │  │  GPT-4o reads page  ──▶  Structured text  ──▶  MinIO TEXT   │
+                       │  │                          + key-value pairs                   │
+                       │  │                                        text_status =          │
+                       │  │                                        'ready_for_embedding'  │
+                       │  └─────────────────────────────────────────┬─────────────────────┘
+                       │                                            │
+                       └───────────────────────────┬───────────────┘
+                                                   │
+                                                   ▼
+ ┌──────────────────────── Stage 3 — Embedding (dashboard-worker) ─────────────────────┐
+ │                                                                                      │
+ │  Celery beat       ──▶  Split into      ──▶  OpenAI → 3072-dim  ──▶  Milvus        │
+ │  polls rows              ~500-token           vectors                 HNSW COSINE    │
+ │                          chunks                             status = 'embedded'      │
+ └──────────────────────────────────────────────────────────────┬───────────────────────┘
+                                                                │
+                                                                ▼
+ ┌──────────────────────── Stage 4 — Retrieval & Chat ─────────────────────────────────┐
+ │                                                                                      │
+ │  User types       ──▶  OpenAI embeds  ──▶  Milvus COSINE  ──▶  DeepSeek LLM       │
+ │  question               question           top-5 search        writes answer        │
+ │                         (3072-dim)                                   │               │
+ │                                                      Answer + source citations       │
+ └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### File Status State Machine
 
 Every file moves through these states in `file_records.text_status` and `file_records.status`:
 
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> pending : File detected
-    pending --> synced : RAW uploaded to MinIO
-    synced --> ready_for_embedding : Text extracted OK
-    synced --> vision_pending : Scanned / low-quality page
-    vision_pending --> vision_processing : Worker picks up task
-    vision_processing --> ready_for_embedding : GPT-4o OCR complete
-    vision_processing --> vision_failed : All retries exhausted
-    ready_for_embedding --> embedding_queued : Celery beat dispatches
-    embedding_queued --> embedded : Vectors in Milvus ✓
-    embedded --> [*] : Available in chat
-
-    pending --> failed : Ingestion error
-    synced --> failed : Extraction error
-    embedding_queued --> failed : Embedding API error
+```
+  (start)
+     │ File detected
+     ▼
+  pending ──────────────────────────────────────────────────── failed (ingestion error)
+     │ RAW uploaded to MinIO
+     ▼
+  synced ───────────────────────────────────────────────────── failed (extraction error)
+     │                              │
+     │ Text extracted OK            │ Scanned / low-quality page
+     ▼                              ▼
+  ready_for_embedding          vision_pending
+     ▲                              │ Worker picks up task
+     │                              ▼
+     │                        vision_processing ──────────── vision_failed
+     │                              │ GPT-4o OCR complete      (all retries exhausted)
+     └──────────────────────────────┘
+     │ Celery beat dispatches
+     ▼
+  embedding_queued ─────────────────────────────────────────── failed (API error)
+     │ Vectors in Milvus
+     ▼
+  embedded
+     │
+     ▼
+  (available in chat)
 ```
 
 ---
@@ -230,124 +226,128 @@ stateDiagram-v2
 
 ### Container Communication Map
 
-```mermaid
-graph TB
-    subgraph browser["🌐 Browser"]
-        UI["Dashboard + Chat UI\napp.js · index.html"]
-    end
-
-    subgraph appServices["Application Layer"]
-        subgraph api["dashboard-api :8000"]
-            API["FastAPI\n/status /chat /ingest\n/dashboard/* /files/*"]
-            FE["Static frontend\nHTML · JS · CSS"]
-        end
-        subgraph worker["dashboard-worker"]
-            W1["Celery worker\nQueues: celery · default · embed\nTasks: download_file · embed_file\npoll_text_ready · run_incremental_sync"]
-        end
-        subgraph workerV["dashboard-worker-vision"]
-            W2["Celery worker\nQueue: vision (concurrency=1)\nTask: vision_extract → GPT-4o"]
-        end
-        subgraph beat["dashboard-beat"]
-            B1["Celery Beat scheduler\nPolls every 5 min:\npoll_text_ready_for_embedding\npoll_vision_pending"]
-        end
-    end
-
-    subgraph microServices["Microservice Layer"]
-        subgraph ingest["ingest-raw-service"]
-            IR["FastAPI :8030\nWatches LABORATORIOS/\nUploads → MinIO RAW\nWrites file_records"]
-        end
-        subgraph extract["extract-text-service"]
-            ET["FastAPI :8031\npdfplumber / docx / xlsx\nQuality check → vision sentinel\nWrites → MinIO TEXT"]
-        end
-        subgraph retrieval["retrieval-admin-service :8010"]
-            RA["FastAPI\nPOST /retrieve\nOpenAI embed → Milvus search\nRedis cache (DB 2)"]
-        end
-        subgraph chatbot["chatbot-response-service :8020"]
-            CR["FastAPI + WebSocket\nPOST /chat  WS /ws/chat\nCalls retrieval-admin\nDeepSeek LLM completion\nRedis conversation history"]
-        end
-    end
-
-    subgraph infra["Infrastructure Layer"]
-        PG[("PostgreSQL 16\n:5432\nfile_records\nsync_state\nextracted_documents")]
-        RD[("Redis 7\n:6379\nDB0: Celery broker\nDB1: Celery results\nDB2: cache + history")]
-        MN[("MinIO\n:9000/:9001\nraw-files bucket\nconverted-texts bucket\na-bucket (Milvus segments)")]
-        MV[("Milvus :19530\nrag_documents collection\nHNSW COSINE 3072-dim\nPartitions: doc·sheet·pdf")]
-        ETCD[("etcd\nMilvus metadata")]
-    end
-
-    subgraph external["External APIs"]
-        OAI["OpenAI\ntext-embedding-3-large\ngpt-4o vision"]
-        DS["DeepSeek\ndeepseek-chat\n(OpenAI-compatible)"]
-    end
-
-    browser -->|HTTPS :8000| api
-    api -->|Celery tasks| RD
-    worker -->|consume| RD
-    workerV -->|consume vision| RD
-    beat -->|schedule| RD
-    api -->|HTTP trigger| ingest
-    api -->|HTTP trigger| extract
-    api -->|SQL| PG
-    api -->|Milvus SDK| MV
-    api -->|Redis SDK| RD
-
-    ingest -->|PUT object| MN
-    ingest -->|INSERT/UPDATE| PG
-    extract -->|GET/PUT object| MN
-    extract -->|UPDATE| PG
-
-    worker -->|GET/PUT| MN
-    worker -->|UPDATE| PG
-    worker -->|Embeddings API| OAI
-    worker -->|upsert vectors| MV
-
-    workerV -->|GET object| MN
-    workerV -->|Vision API| OAI
-    workerV -->|UPDATE| PG
-
-    retrieval -->|Embeddings API| OAI
-    retrieval -->|Vector search| MV
-    retrieval -->|GET/SET| RD
-
-    chatbot -->|POST /retrieve| retrieval
-    chatbot -->|Chat Completions| DS
-    chatbot -->|conversation history| RD
-
-    MV --- ETCD
-    MV ---| segment storage | MN
+```
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  BROWSER                                                                  │
+  │  Dashboard + Chat UI  (app.js · index.html)                              │
+  └────────────────────────────────────┬─────────────────────────────────────┘
+                                       │ HTTPS :8000
+                                       ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  APPLICATION LAYER                                                        │
+  │                                                                           │
+  │  dashboard-api :8000                  dashboard-worker                   │
+  │  ┌──────────────────────────────┐     ┌──────────────────────────────┐   │
+  │  │ FastAPI                      │     │ Celery worker                │   │
+  │  │ /status /chat /ingest        │     │ Queues: celery·default·embed │   │
+  │  │ /dashboard/* /files/*        │     │ Tasks: download_file         │   │
+  │  │ Static frontend HTML/JS/CSS  │     │        embed_file            │   │
+  │  └──────────────────────────────┘     │        poll_text_ready       │   │
+  │                                       │        run_incremental_sync  │   │
+  │  dashboard-worker-vision              └──────────────────────────────┘   │
+  │  ┌──────────────────────────────┐     dashboard-beat                     │
+  │  │ Celery worker                │     ┌──────────────────────────────┐   │
+  │  │ Queue: vision (concurrency=1)│     │ Celery Beat scheduler        │   │
+  │  │ Task: vision_extract         │     │ Polls every 5 min:           │   │
+  │  │       via GPT-4o             │     │   poll_text_ready_for_embed  │   │
+  │  └──────────────────────────────┘     │   poll_vision_pending        │   │
+  │                                       └──────────────────────────────┘   │
+  └────────────────────────────────────┬─────────────────────────────────────┘
+                                       │ HTTP triggers + Celery tasks via Redis
+                                       ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  MICROSERVICE LAYER                                                       │
+  │                                                                           │
+  │  ingest-raw-service :8030             extract-text-service :8031          │
+  │  ┌──────────────────────────────┐     ┌──────────────────────────────┐   │
+  │  │ Watches LABORATORIOS/        │     │ pdfplumber / python-docx     │   │
+  │  │ SHA-256 dedup                │     │ openpyxl                     │   │
+  │  │ Uploads → MinIO raw-files    │     │ Quality check → vision sent. │   │
+  │  │ Writes file_records          │     │ Writes → MinIO converted-texts│  │
+  │  └──────────────────────────────┘     └──────────────────────────────┘   │
+  │                                                                           │
+  │  retrieval-admin-service :8010        chatbot-response-service :8020      │
+  │  ┌──────────────────────────────┐     ┌──────────────────────────────┐   │
+  │  │ POST /retrieve               │     │ POST /chat  WS /ws/chat      │   │
+  │  │ OpenAI embed → Milvus search │     │ Redis conversation history   │   │
+  │  │ Redis cache (DB2, TTL 5 min) │     │ Calls retrieval-admin        │   │
+  │  └──────────────────────────────┘     │ DeepSeek LLM completion      │   │
+  │                                       └──────────────────────────────┘   │
+  └────────────────────────────────────┬─────────────────────────────────────┘
+                                       │ SQL · Redis SDK · MinIO · Milvus SDK
+                                       ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  INFRASTRUCTURE LAYER                                                     │
+  │                                                                           │
+  │  PostgreSQL 16 :5432              Redis 7 :6379                          │
+  │  ┌─────────────────────────┐      ┌─────────────────────────────────┐    │
+  │  │ file_records            │      │ DB0: Celery broker (AOF persist)│    │
+  │  │ sync_state              │      │ DB1: Celery results             │    │
+  │  │ extracted_documents     │      │ DB2: retrieval cache + conv hist│    │
+  │  └─────────────────────────┘      └─────────────────────────────────┘    │
+  │                                                                           │
+  │  MinIO :9000/:9001                Milvus :19530                          │
+  │  ┌─────────────────────────┐      ┌─────────────────────────────────┐    │
+  │  │ raw-files bucket        │      │ rag_documents collection        │    │
+  │  │ converted-texts bucket  │      │ HNSW COSINE · dim=3072          │    │
+  │  │ a-bucket (Milvus segs.) │      │ Partitions: doc · sheet · pdf   │    │
+  │  └─────────────────────────┘      └───────────────────┬─────────────┘    │
+  │                                                        │                  │
+  │  etcd (Milvus metadata store) ◀────────────────────────┘                 │
+  └────────────────────────────────────┬─────────────────────────────────────┘
+                                       │ API calls
+                                       ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  EXTERNAL APIS                                                            │
+  │                                                                           │
+  │  OpenAI                                    DeepSeek                       │
+  │  ┌──────────────────────────────────────┐  ┌────────────────────────┐    │
+  │  │ text-embedding-3-large (dim=3072)    │  │ deepseek-chat          │    │
+  │  │ gpt-4o (vision OCR)                  │  │ (OpenAI-compatible API)│    │
+  │  └──────────────────────────────────────┘  └────────────────────────┘    │
+  └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Chat Request — Sequence
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant UI as Browser UI :8000
-    participant Chat as chatbot-response :8020
-    participant Redis as Redis DB2
-    participant Ret as retrieval-admin :8010
-    participant OAI as OpenAI API
-    participant MV as Milvus
-    participant DS as DeepSeek API
-
-    User->>UI: "What are delivery terms for contract C-010?"
-    UI->>Chat: POST /chat {query, conversation_id}
-    Chat->>Redis: LRANGE conv:{id} → prior turns
-    Chat->>Ret: POST /retrieve {query, top_k: 5}
-    Ret->>Redis: HGET ra-retrieval:{hash} → cached?
-    alt Cache miss
-        Ret->>OAI: POST /v1/embeddings (text-embedding-3-large)
-        OAI-->>Ret: [0.12, -0.34, ..., 3072 floats]
-        Ret->>MV: COSINE search top-5, partition=pdf
-        MV-->>Ret: [{text, source_name, score}, ×5]
-        Ret->>Redis: HSET ra-retrieval:{hash} (TTL 5 min)
-    end
-    Ret-->>Chat: context paragraphs + source metadata
-    Chat->>DS: POST /v1/chat/completions\n{system, context, history, query}
-    DS-->>Chat: answer text (stream)
-    Chat->>Redis: RPUSH conv:{id} [user_turn, assistant_turn]
-    Chat-->>UI: {answer, sources:[{name, url, score}], conversation_id}
-    UI-->>User: Rendered answer + source cards with MinIO links
+```
+  User      UI :8000    chatbot :8020   Redis DB2   retrieval :8010   OpenAI   Milvus   DeepSeek
+   │             │              │             │              │            │        │         │
+   │ question    │              │             │              │            │        │         │
+   ├────────────▶│              │             │              │            │        │         │
+   │             │ POST /chat   │             │              │            │        │         │
+   │             │ {query,      │             │              │            │        │         │
+   │             │  conv_id}    │             │              │            │        │         │
+   │             ├─────────────▶│             │              │            │        │         │
+   │             │              │ LRANGE      │              │            │        │         │
+   │             │              │ conv:{id}   │              │            │        │         │
+   │             │              ├────────────▶│              │            │        │         │
+   │             │              │◀────────────┤ prior turns  │            │        │         │
+   │             │              │       POST /retrieve {query, top_k: 5}  │        │         │
+   │             │              ├──────────────────────────────────────────         │         │
+   │             │              │             │   HGET ra-retrieval:{hash}│        │         │
+   │             │              │             │              ├────────────▶│        │         │
+   │             │              │             │              │  (cache miss)         │         │
+   │             │              │             │              ├─ embed query ────────▶│         │
+   │             │              │             │              │◀─ 3072-dim vector ───┤│         │
+   │             │              │             │              ├─ COSINE search top-5 ──────────▶│
+   │             │              │             │              │◀─ [{text,source,score}×5] ──────┤
+   │             │              │             │   HSET cache (TTL 5 min)  │        │         │
+   │             │              │             │              ├────────────▶│        │         │
+   │             │              │◀────────────────────────────context + sources      │         │
+   │             │              │ POST /v1/chat/completions                │        │         │
+   │             │              │  {system, context, history, query}       │        │         │
+   │             │              ├────────────────────────────────────────────────────────────▶│
+   │             │              │◀──────────────────────────────────────────────── answer ───┤│
+   │             │              │ RPUSH conv:{id}             │            │        │         │
+   │             │              │ [user_turn, asst_turn]      │            │        │         │
+   │             │              ├────────────▶│              │            │        │         │
+   │             │ {answer,     │             │              │            │        │         │
+   │             │  sources,    │             │              │            │        │         │
+   │             │  conv_id}    │             │              │            │        │         │
+   │             │◀─────────────┤             │              │            │        │         │
+   │◀────────────┤              │             │              │            │        │         │
+   │  rendered answer + source cards with MinIO links        │            │        │         │
 ```
 
 ---
@@ -665,26 +665,22 @@ Check that `LLM_API_KEY` and `LLM_BASE_URL` are set in `.env`. The service uses 
 
 ## Standard Relationship Diagram
 
-```mermaid
-flowchart LR
-    subgraph orchestrator["This Repository"]
-        O[RAG_Darovi]
-    end
+```
+  RAG_Darovi  (this repository — all services inlined, submodules dissolved 2026-05)
+  │
+  ├── services/ingest_raw
+  ├── services/extract_text
+  ├── services/retrieval_admin
+  ├── services/chatbot_response
+  ├── dashboard/rag-dashboard-core
+  ├── schema/rag-schema
+  └── qa/rag-e2e-contracts
 
-    subgraph services["Service Code (inlined)"]
-        IR[services/ingest_raw]
-        ET[services/extract_text]
-        RA[services/retrieval_admin]
-        CR[services/chatbot_response]
-        DB[dashboard/rag-dashboard-core]
-        SC[schema/rag-schema]
-        QA[qa/rag-e2e-contracts]
-    end
-
-    O --> IR & ET & RA & CR & DB & SC & QA
-    IR --> ET --> RA --> CR
-    DB --> SC
-    CR --> RA
+  Pipeline flow:
+  ingest_raw ──▶ extract_text ──▶ retrieval_admin ◀──── chatbot_response
+                                       ▲
+                                       └────────────────  chatbot_response
+  dashboard/rag-dashboard-core ──▶ schema/rag-schema
 ```
 
 > All service code lives directly in this monorepo (submodules were dissolved in May 2026). Changes to any service are committed directly here.
