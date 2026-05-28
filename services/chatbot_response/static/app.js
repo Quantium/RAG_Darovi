@@ -81,16 +81,46 @@ logoutBtn.addEventListener("click", async () => {
 });
 
 // ── Chat helpers ──────────────────────────────────────────────────────────────
+const USER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
+const BOT_ICON  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>`;
+
+function nowTime() {
+  return new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+}
+
 function addMessage(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
+
+  const avatar = document.createElement("div");
+  avatar.className = "msg-avatar";
+  avatar.innerHTML = role === "user" ? USER_ICON : BOT_ICON;
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
+
+  const bubble = document.createElement("div");
+  bubble.className = "msg-bubble";
   if (role === "user") {
-    el.textContent = text;
+    bubble.textContent = text;
   } else {
-    el.innerHTML = marked.parse(text);
+    bubble.innerHTML = marked.parse(text);
   }
+
+  const time = document.createElement("span");
+  time.className = "msg-time";
+  time.textContent = nowTime();
+
+  body.appendChild(bubble);
+  body.appendChild(time);
+  el.appendChild(avatar);
+  el.appendChild(body);
+
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
+
+  // expose bubble so callers can update it
+  el._bubble = bubble;
   return el;
 }
 
@@ -128,7 +158,8 @@ function addRatingButtons(interactionId) {
     btn.addEventListener("click", () => handleRating(btn.dataset.rating, interactionId, bar));
   });
 
-  form.parentNode.insertBefore(bar, form);
+  const inputArea = document.querySelector(".chat-input-area");
+  inputArea.parentNode.insertBefore(bar, inputArea);
 }
 
 async function handleRating(rating, interactionId, bar) {
@@ -204,10 +235,10 @@ form.addEventListener("submit", async (event) => {
     }
     const data = await res.json();
     conversationId = data.conversation_id;
-    assistant.innerHTML = marked.parse(data.answer);
+    assistant._bubble.innerHTML = marked.parse(data.answer);
     renderSources(data.sources);
     addRatingButtons(data.interaction_id);
   } catch (error) {
-    assistant.textContent = `Error: ${String(error)}`;
+    assistant._bubble.textContent = `Error: ${String(error)}`;
   }
 });
