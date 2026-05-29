@@ -1,0 +1,31 @@
+name: Deploy chatbot to AWS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_IP }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/RAG_Darovi
+            git pull origin main
+
+            # Run schema migrations against Neon (idempotent — safe on every deploy)
+            source ~/.profile
+            cd schema/rag-schema
+            DATABASE_URL=$(grep '^DATABASE_URL_SYNC=' ~/RAG_Darovi/.env.aws | cut -d= -f2-) \
+              uv run alembic upgrade head
+            cd ~/RAG_Darovi
+
+            # Rebuild and restart only the application services (redis keeps running)
+            docker compose -f docker-compose.aws.yml up -d --build --no-deps \
+              chatbot-response-service retrieval-admin-service nginx
