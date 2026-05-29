@@ -39,10 +39,15 @@ class MilvusStore:
         self._dim = settings.embed_dim
         self._host = settings.milvus_host
         self._port = settings.milvus_port
+        self._uri = settings.milvus_uri
+        self._token = settings.milvus_token
         self._client = client  # injected mock for tests
 
         if client is None:
-            connections.connect(host=self._host, port=self._port)
+            if self._uri:
+                connections.connect(uri=self._uri, token=self._token)
+            else:
+                connections.connect(host=self._host, port=self._port)
 
     def collection_exists(self) -> bool:
         """Return True if the configured Milvus collection already exists.
