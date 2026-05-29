@@ -56,7 +56,10 @@ class Retriever:
         self._settings = settings
         self._cache = cache
         self._cache_ttl = 3600
-        connections.connect(host=settings.milvus_host, port=settings.milvus_port)
+        if settings.milvus_uri:
+            connections.connect(uri=settings.milvus_uri, token=settings.milvus_token)
+        else:
+            connections.connect(host=settings.milvus_host, port=settings.milvus_port)
 
     async def retrieve(self, query: str, top_k: int = 10, document_type: str | None = None) -> list[RetrievedChunk]:
         """Retrieve relevant document chunks using vector search and a keyword fallback.

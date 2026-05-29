@@ -179,7 +179,9 @@ Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatica
 
 **Env var naming**: Settings use `pydantic-settings` which maps `SNAKE_CASE` env vars to lowercase field names. The dashboard settings file is `dashboard/rag-dashboard-core/config/settings.py`; each service has `app/settings.py`. Always verify both sides when adding a new env var.
 
-**Milvus + embeddings coupling**: `EMBED_DIM` and `EMBED_MODEL` must match the stored collection schema. Changing either requires dropping and recreating the Milvus collection (`store.drop_collection_if_exists()`) and re-running the full embedding pipeline.
+**Vector database**: The `rag_documents` collection is hosted on **Zilliz Cloud** (set via `MILVUS_URI` + `MILVUS_TOKEN` in `.env`). Local `milvus`/`milvus-etcd` containers exist in docker-compose but are stopped and not used. To restore local Milvus for dev, start them manually: `docker compose up -d milvus milvus-etcd` and unset `MILVUS_URI`.
+
+**Milvus + embeddings coupling**: `EMBED_DIM` and `EMBED_MODEL` must match the stored collection schema. Changing either requires dropping and recreating the Zilliz collection (`store.drop_collection_if_exists()`) and re-running the full embedding pipeline.
 
 **Volume safety**: `make clean` runs `docker compose down -v` which deletes `pgdata`, `miniodata`, `milvusdata`, `redisdata`. Run `./scripts/backup.sh` before any destructive operation.
 
@@ -197,6 +199,6 @@ Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatica
 | 5432 | PostgreSQL |
 | 6379 | Redis |
 | 9000 / 9001 | MinIO API / console |
-| 19530 | Milvus gRPC |
+| 19530 | Milvus gRPC — **local dev only**; production uses Zilliz Cloud via `MILVUS_URI` |
 
 Redis DBs: 0 = Celery broker (AOF persistent), 1 = Celery results, 2 = retrieval cache + conversation history.

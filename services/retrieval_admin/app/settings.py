@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     milvus_host: str = "milvus"
     milvus_port: int = 19530
     milvus_collection: str = "rag_documents"
+    milvus_uri: str = ""
+    milvus_token: str = ""
 
     embed_api_url: str = "https://api.openai.com/v1"
     embed_api_key: SecretStr = SecretStr("")

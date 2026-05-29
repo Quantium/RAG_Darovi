@@ -286,14 +286,13 @@ Every file moves through these states in `file_records.text_status` and `file_re
   │  │ extracted_documents     │      │ DB2: retrieval cache + conv hist│    │
   │  └─────────────────────────┘      └─────────────────────────────────┘    │
   │                                                                           │
-  │  MinIO :9000/:9001                Milvus :19530                          │
+  │  MinIO :9000/:9001                Zilliz Cloud (managed Milvus)          │
   │  ┌─────────────────────────┐      ┌─────────────────────────────────┐    │
   │  │ raw-files bucket        │      │ rag_documents collection        │    │
   │  │ converted-texts bucket  │      │ HNSW COSINE · dim=3072          │    │
   │  │ a-bucket (Milvus segs.) │      │ Partitions: doc · sheet · pdf   │    │
-  │  └─────────────────────────┘      └───────────────────┬─────────────┘    │
-  │                                                        │                  │
-  │  etcd (Milvus metadata store) ◀────────────────────────┘                 │
+  │  └─────────────────────────┘      │ Endpoint: MILVUS_URI (env)      │    │
+  │                                   └─────────────────────────────────┘    │
   └────────────────────────────────────┬─────────────────────────────────────┘
                                        │ API calls
                                        ▼
@@ -369,8 +368,8 @@ Every file moves through these states in `file_records.text_status` and `file_re
 | `postgres` | `5432` | `postgres:16-alpine` | Relational metadata store |
 | `redis` | `6379` | `redis:7-alpine` | Celery broker (DB 0), results (DB 1), retrieval cache + conversation history (DB 2) |
 | `minio` | `9000/9001` | `minio/minio` | Object storage: `raw-files`, `converted-texts`, `a-bucket` (Milvus internal segments) |
-| `milvus` | `19530` | `milvusdb/milvus:v2.4.21` | Vector database: `rag_documents` collection, HNSW COSINE index (dim=3072) |
-| `milvus-etcd` | — | `quay.io/coreos/etcd:v3.5.18` | Milvus collection metadata store |
+| `milvus` | `19530` | `milvusdb/milvus:v2.4.21` | **Local dev only — not started in production.** Zilliz Cloud is used instead (set `MILVUS_URI`). |
+| `milvus-etcd` | — | `quay.io/coreos/etcd:v3.5.18` | **Local dev only** — Milvus metadata store, only needed when `milvus` container is running. |
 
 ### Named Volumes (persistent data — survives `docker compose down`)
 
@@ -454,17 +453,19 @@ Copy `.env.example` to `.env` and fill in the required values. The file is gitig
 | `REDIS_RESULT_URL` | `redis://localhost:6379/1` | 1 | Celery task results backend |
 | `REDIS_CACHE_URL` | `redis://localhost:6379/2` | 2 | Retrieval cache (5-min TTL) + conversation history (`conv:{id}` lists) |
 
-### Milvus — Vector Database
+### Milvus / Zilliz — Vector Database
 
-[Milvus](https://milvus.io/docs/overview.md) is the vector database that powers semantic search. It stores 3072-dimensional float vectors representing the "meaning" of each text chunk.
+The vector database stores 3072-dimensional float vectors representing the "meaning" of each text chunk. The collection is hosted on **[Zilliz Cloud](https://zilliz.com/)** (managed Milvus). The local `milvus` container in docker-compose is kept for development fallback only.
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `MILVUS_HOST` | `localhost` | — | Hostname of the Milvus gRPC server |
-| `MILVUS_PORT` | `19530` | — | gRPC port |
+| `MILVUS_URI` | *(empty)* | ✅ (production) | Zilliz Cloud endpoint, e.g. `https://in01-xxx.zillizcloud.com:19532`. When set, `MILVUS_HOST`/`MILVUS_PORT` are ignored. |
+| `MILVUS_TOKEN` | *(empty)* | ✅ (production) | Zilliz Cloud API key. Create one in the Zilliz console under **API Keys**. |
 | `MILVUS_COLLECTION` | `rag_documents` | — | Collection name. Contains partitions: `doc`, `sheet`, `pdf`. Index: [HNSW COSINE](https://arxiv.org/abs/1603.09320), M=16, efConstruction=256, dim=3072 |
+| `MILVUS_HOST` | `localhost` | — | Hostname of a local Milvus instance (used only when `MILVUS_URI` is empty) |
+| `MILVUS_PORT` | `19530` | — | gRPC port for local Milvus |
 
-> **Changing `EMBED_DIM` or `EMBED_MODEL`?** You must drop and recreate the Milvus collection (use the Re-Vectorize button in the dashboard), then re-run the embedding pipeline. Stored vectors and model dimensions must always match.
+> **Changing `EMBED_DIM` or `EMBED_MODEL`?** You must drop and recreate the collection on Zilliz (use the Re-Vectorize button in the dashboard), then re-run the embedding pipeline. Stored vectors and model dimensions must always match.
 
 ### OCR Tuning (Tesseract Fallback)
 
@@ -615,11 +616,12 @@ If you see persistent failures, check `file_records.error_message` in PostgreSQL
 SELECT name, error_message FROM file_records WHERE text_status = 'embedding_queued' LIMIT 10;
 ```
 
-### Milvus has 0 vectors after restart
+### Milvus / Zilliz has 0 vectors after restart
 
-If `milvus_vectors = 0` in the dashboard state but PostgreSQL shows files as `embedded`, the Milvus volume was likely wiped. Use the Re-Vectorize button (or `POST /dashboard/re-vectorize` with header `X-Dashboard-Confirm: yes`) to rebuild from existing extracted texts in MinIO — no API cost, no re-OCR needed.
+If `milvus_vectors = 0` in the dashboard state but PostgreSQL shows files as `embedded`:
 
-If you have a recent backup, restore it with `./scripts/restore.sh`.
+- **Production (Zilliz)**: the collection data is persistent in the cloud. Check that `MILVUS_URI` and `MILVUS_TOKEN` are correctly set in `.env` and that the services were rebuilt (`docker compose up -d --build --no-deps dashboard-api retrieval-admin-service`).
+- **Local Milvus**: the `milvusdata` volume may have been wiped. Use the Re-Vectorize button (or `POST /dashboard/re-vectorize` with header `X-Dashboard-Confirm: yes`) to rebuild from MinIO extracted texts — no API cost, no re-OCR needed. If you have a recent backup, run `./scripts/restore.sh`.
 
 ### `ImportError` on startup
 

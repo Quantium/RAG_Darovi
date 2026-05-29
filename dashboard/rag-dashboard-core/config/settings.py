@@ -32,10 +32,12 @@ class Settings(BaseSettings):
     redis_result_url: str = "redis://localhost:6379/1"
     redis_cache_url: str = "redis://localhost:6379/2"
 
-    # Milvus
+    # Milvus — use milvus_uri + milvus_token for Zilliz Cloud; host/port for local
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     milvus_collection: str = "rag_documents"
+    milvus_uri: str = ""
+    milvus_token: str = ""
 
     # OpenAI — embeddings
     embed_api_url: str = "https://api.openai.com/v1"
