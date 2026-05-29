@@ -43,6 +43,16 @@ async def verify_api_key(request: HTTPConnection) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """FastAPI lifespan context manager: initialize all services on startup and clean up on shutdown.
+
+    Wires database, Milvus, Redis, embedder, retriever, LLM, and conversation store into app state.
+
+    Args:
+        app: The FastAPI application instance.
+
+    Yields:
+        Control to the running application.
+    """
     configure_logging()
     settings = Settings()
     logger.info("app.startup", provider=settings.llm_provider)
@@ -84,6 +94,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    """Build and configure the RAG Darovi FastAPI application with all routers and middleware.
+
+    Returns:
+        Fully configured FastAPI instance ready to serve requests.
+    """
     from src.api.dashboard_routes import dashboard_router
     from src.api.response_routes import response_router
     from src.api.routes import router
@@ -118,14 +133,17 @@ def create_app() -> FastAPI:
 
         @app.get("/")
         async def _serve_index() -> FileResponse:
+            """Serve the dashboard SPA HTML entry point."""
             return FileResponse(static_root / "index.html")
 
         @app.get("/app.js")
         async def _serve_app_js() -> FileResponse:
+            """Serve the dashboard SPA JavaScript bundle."""
             return FileResponse(static_root / "app.js", media_type="application/javascript")
 
         @app.get("/styles.css")
         async def _serve_styles() -> FileResponse:
+            """Serve the dashboard SPA stylesheet."""
             return FileResponse(static_root / "styles.css", media_type="text/css")
 
     return app

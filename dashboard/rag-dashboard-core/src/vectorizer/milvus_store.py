@@ -29,6 +29,12 @@ class VectorStore(Protocol):
 
 class MilvusStore:
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
+        """Initialize the Milvus store, connecting to the configured host and port.
+
+        Args:
+            settings: Application settings providing collection name, embedding dim, and host/port.
+            client: Optional mock client injected during tests (skips live Milvus connection).
+        """
         self._collection_name = settings.milvus_collection
         self._dim = settings.embed_dim
         self._host = settings.milvus_host
@@ -39,11 +45,20 @@ class MilvusStore:
             connections.connect(host=self._host, port=self._port)
 
     def collection_exists(self) -> bool:
+        """Return True if the configured Milvus collection already exists.
+
+        Returns:
+            True if the collection is present, False otherwise.
+        """
         if self._client:
             return self._client.has_collection(self._collection_name)
         return utility.has_collection(self._collection_name)
 
     def create_collection(self) -> None:
+        """Create the Milvus collection with schema, HNSW index, and default partitions.
+
+        Partitions created: 'doc', 'sheet', 'pdf'.
+        """
         fields = [
             FieldSchema(name="id", dtype=DataType.VARCHAR, max_length=256, is_primary=True),
             FieldSchema(name="source_file_id", dtype=DataType.VARCHAR, max_length=256),
@@ -78,6 +93,7 @@ class MilvusStore:
         logger.info("milvus.collection_created", name=self._collection_name)
 
     def ensure_collection(self) -> None:
+        """Create the Milvus collection if it does not already exist."""
         if not self.collection_exists():
             self.create_collection()
 
@@ -109,6 +125,15 @@ class MilvusStore:
         self.drop_collection_if_exists()
 
     def upsert(self, chunks: list[dict], embeddings: list[list[float]]) -> None:
+        """Insert chunk metadata and their embeddings into the appropriate Milvus partition.
+
+        Batches inserts in groups of MILVUS_INSERT_BATCH_SIZE. The partition is derived
+        from the 'document_type' field of the first chunk; unknown types default to 'doc'.
+
+        Args:
+            chunks: List of chunk dicts with 'id', 'source_file_id', 'text', etc.
+            embeddings: Parallel list of embedding vectors, one per chunk.
+        """
         if not chunks:
             return
 
@@ -145,6 +170,17 @@ class MilvusStore:
         logger.info("milvus.upserted", count=len(chunks), partition=partition_name)
 
     def search(self, query_embedding: list[float], top_k: int = 10, partition: str | None = None) -> list[dict]:
+        """Perform a COSINE similarity search and return the top-k results.
+
+        Args:
+            query_embedding: Dense vector to search against.
+            top_k: Maximum number of nearest neighbors to return.
+            partition: Optional partition name to restrict the search scope.
+
+        Returns:
+            List of dicts with 'id', 'source_file_id', 'source_name', 'section_title',
+            'text', and 'score' for each result.
+        """
         search_params = {"metric_type": "COSINE", "params": {"ef": 128}}
         partition_names = [partition] if partition else None
 
@@ -185,6 +221,11 @@ class MilvusStore:
         return output
 
     def delete_by_source(self, source_file_id: str) -> None:
+        """Delete all Milvus vectors associated with a given source file ID.
+
+        Args:
+            source_file_id: Source file identifier whose vectors should be removed.
+        """
         expr = f'source_file_id == "{source_file_id}"'
         if self._client:
             self._client.delete(self._collection_name, expr)

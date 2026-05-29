@@ -13,6 +13,7 @@ from src.vision.client import OpenAICompatVisionClient, VisionTimeoutError
 
 @pytest.fixture
 def vision_settings(settings: Settings) -> Settings:
+    """Return Settings configured with a mock vision endpoint and API key."""
     return settings.model_copy(
         update={
             "vision_external_base_url": "https://vision-mock.openai.com/v1",
@@ -25,6 +26,7 @@ def vision_settings(settings: Settings) -> Settings:
 
 class TestOpenAICompatVisionClient:
     async def test_generate_posts_to_chat_completions(self, vision_settings):
+        """Verify generate POSTs to /chat/completions with the model and base64 image payload."""
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -48,6 +50,7 @@ class TestOpenAICompatVisionClient:
         assert b64 in body
 
     async def test_generate_with_json_mode_sets_response_format(self, vision_settings):
+        """Verify json_mode=True adds the json_object response_format to the request payload."""
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -65,6 +68,7 @@ class TestOpenAICompatVisionClient:
         assert "json_object" in captured["json"]
 
     async def test_generate_raises_vision_timeout_on_read_timeout(self, vision_settings):
+        """Verify generate raises VisionTimeoutError on httpx.ReadTimeout."""
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ReadTimeout("simulated", request=request)
 
@@ -75,6 +79,7 @@ class TestOpenAICompatVisionClient:
             await client.generate("prompt", "Zm9v", json_mode=False)
 
     async def test_generate_retries_then_succeeds(self, vision_settings):
+        """Verify generate retries on HTTP 503 and succeeds on the second attempt."""
         calls = {"count": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:

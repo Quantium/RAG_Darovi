@@ -20,6 +20,19 @@ def evaluate_text_quality(
     min_alpha_ratio: float,
     max_single_char_line_ratio: float,
 ) -> TextQualityResult:
+    """Evaluate whether extracted page text meets minimum quality thresholds for direct use.
+
+    Pages that fail are typically candidates for vision OCR fallback.
+
+    Args:
+        text: Raw text extracted from a single page.
+        min_text_chars: Minimum number of non-whitespace characters required.
+        min_alpha_ratio: Minimum fraction of alphabetic characters among non-whitespace.
+        max_single_char_line_ratio: Maximum fraction of lines with only a single character.
+
+    Returns:
+        TextQualityResult with is_usable flag and diagnostic metrics.
+    """
     non_ws_chars = len(re.findall(r"\S", text))
     if non_ws_chars == 0:
         return TextQualityResult(

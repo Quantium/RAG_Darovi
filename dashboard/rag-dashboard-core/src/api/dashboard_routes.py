@@ -27,6 +27,14 @@ CONFIRM_HEADER = "X-Dashboard-Confirm"
 
 
 def _require_dashboard_confirm(request: Request) -> None:
+    """FastAPI dependency that blocks destructive actions unless the confirm header is set.
+
+    Args:
+        request: Incoming FastAPI request carrying the confirmation header.
+
+    Raises:
+        HTTPException: 400 if the X-Dashboard-Confirm header is not 'yes'.
+    """
     val = request.headers.get(CONFIRM_HEADER, "").strip().lower()
     if val != "yes":
         raise HTTPException(
@@ -41,6 +49,16 @@ def _require_dashboard_confirm(request: Request) -> None:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_state(request: Request) -> DashboardState:
+    """Build and return the full dashboard state snapshot including pipeline metrics.
+
+    Aggregates counts from PostgreSQL, MinIO, Milvus, Redis, Celery, and the source adapter.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardState with card counts, processing flags, pause state, and in-flight files.
+    """
     settings: Settings = request.app.state.settings
     storage = MinIOStorage(settings)
     raw_bucket = settings.minio_bucket_raw
@@ -151,6 +169,11 @@ async def dashboard_state(request: Request) -> DashboardState:
 
 
 async def _reset_all_raw_stage(session: AsyncSession) -> None:
+    """Reset every file_record back to a clean 'pending' state, clearing all stage columns.
+
+    Args:
+        session: Active SQLAlchemy async session to execute the update on.
+    """
     await session.execute(
         text(
             """
@@ -182,6 +205,17 @@ async def _reset_all_raw_stage(session: AsyncSession) -> None:
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
 async def dashboard_re_ingest(request: Request) -> DashboardActionResult:
+    """Clear all raw MinIO objects, reset file records, and queue a full re-ingestion.
+
+    Requires the X-Dashboard-Confirm: yes header. Also triggers the ingest-raw HTTP service
+    if INGEST_RAW_TRIGGER_URL is configured.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult describing how many objects were cleared and the trigger outcome.
+    """
     settings: Settings = request.app.state.settings
     storage = MinIOStorage(settings)
     n = storage.remove_all_objects(settings.minio_bucket_raw)
@@ -212,6 +246,11 @@ async def dashboard_re_ingest(request: Request) -> DashboardActionResult:
 
 
 async def _reset_text_for_raw_synced(session: AsyncSession) -> None:
+    """Reset text-stage columns for all rows that already have raw_status='synced'.
+
+    Args:
+        session: Active SQLAlchemy async session to execute the update on.
+    """
     await session.execute(
         text(
             """
@@ -261,6 +300,16 @@ async def dashboard_trigger_transform(request: Request) -> DashboardActionResult
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
 async def dashboard_re_transform(request: Request) -> DashboardActionResult:
+    """Clear all text MinIO objects, reset text stage for raw-synced rows, and trigger extract-text.
+
+    Requires the X-Dashboard-Confirm: yes header.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult describing cleared objects and the trigger outcome.
+    """
     settings: Settings = request.app.state.settings
     storage = MinIOStorage(settings)
     n = storage.remove_all_objects(settings.minio_bucket_text)
@@ -291,6 +340,16 @@ async def dashboard_re_transform(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
 async def dashboard_re_vectorize(request: Request) -> DashboardActionResult:
+    """Drop and recreate the Milvus collection, then queue a re-embedding pass via Celery.
+
+    Requires the X-Dashboard-Confirm: yes header.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult with the queued Celery job ID.
+    """
     from src.worker.tasks import restart_vectorization
 
     job = restart_vectorization.delay()
@@ -390,6 +449,14 @@ async def dashboard_erase_all(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_ingest_pause(request: Request) -> DashboardActionResult:
+    """Set the Redis pause flag for the ingest pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was paused.
+    """
     request.app.state.redis_cache.set("rag:pause:ingest", "1")
     logger.info("dashboard.pause", stage="ingest")
     return DashboardActionResult(status="ok", detail="Ingest pipeline paused.", job_ids=[])
@@ -401,6 +468,14 @@ async def dashboard_ingest_pause(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_ingest_resume(request: Request) -> DashboardActionResult:
+    """Clear the Redis pause flag for the ingest pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was resumed.
+    """
     request.app.state.redis_cache.delete("rag:pause:ingest")
     logger.info("dashboard.resume", stage="ingest")
     return DashboardActionResult(status="ok", detail="Ingest pipeline resumed.", job_ids=[])
@@ -412,6 +487,14 @@ async def dashboard_ingest_resume(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_transform_pause(request: Request) -> DashboardActionResult:
+    """Set the Redis pause flag for the transform pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was paused.
+    """
     request.app.state.redis_cache.set("rag:pause:transform", "1")
     logger.info("dashboard.pause", stage="transform")
     return DashboardActionResult(status="ok", detail="Transform pipeline paused.", job_ids=[])
@@ -423,6 +506,14 @@ async def dashboard_transform_pause(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_transform_resume(request: Request) -> DashboardActionResult:
+    """Clear the Redis pause flag for the transform pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was resumed.
+    """
     request.app.state.redis_cache.delete("rag:pause:transform")
     logger.info("dashboard.resume", stage="transform")
     return DashboardActionResult(status="ok", detail="Transform pipeline resumed.", job_ids=[])
@@ -434,6 +525,14 @@ async def dashboard_transform_resume(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_vectorize_pause(request: Request) -> DashboardActionResult:
+    """Set the Redis pause flag for the vectorize pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was paused.
+    """
     request.app.state.redis_cache.set("rag:pause:vectorize", "1")
     logger.info("dashboard.pause", stage="vectorize")
     return DashboardActionResult(status="ok", detail="Vectorize pipeline paused.", job_ids=[])
@@ -445,6 +544,14 @@ async def dashboard_vectorize_pause(request: Request) -> DashboardActionResult:
     dependencies=[Depends(verify_api_key)],
 )
 async def dashboard_vectorize_resume(request: Request) -> DashboardActionResult:
+    """Clear the Redis pause flag for the vectorize pipeline stage.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        DashboardActionResult confirming the stage was resumed.
+    """
     request.app.state.redis_cache.delete("rag:pause:vectorize")
     logger.info("dashboard.resume", stage="vectorize")
     return DashboardActionResult(status="ok", detail="Vectorize pipeline resumed.", job_ids=[])

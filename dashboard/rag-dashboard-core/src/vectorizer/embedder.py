@@ -16,6 +16,12 @@ class BatchEmbedder:
     """Batch text embedder using an OpenAI-compatible /v1/embeddings endpoint."""
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+        """Initialize the embedder with API credentials and batch settings.
+
+        Args:
+            settings: Application settings providing API URL, key, model, and batch size.
+            client: Optional pre-built httpx.AsyncClient (useful for testing).
+        """
         self._batch_size = settings.embed_batch_size
         self._dim = settings.embed_dim
         self._timeout = float(settings.embed_request_timeout_s)
@@ -43,6 +49,11 @@ class BatchEmbedder:
 
     @asynccontextmanager
     async def _get_client(self) -> AsyncGenerator[httpx.AsyncClient, None]:
+        """Yield the injected client or create a managed one for the duration of the context.
+
+        Yields:
+            An httpx.AsyncClient ready for making embedding requests.
+        """
         if self._client:
             yield self._client
         else:
@@ -50,6 +61,21 @@ class BatchEmbedder:
                 yield client
 
     async def _embed_batch(self, client: httpx.AsyncClient, texts: list[str], max_retries: int = 3) -> list[list[float]]:
+        """Embed a single batch of texts with exponential-backoff retry on transient failures.
+
+        Empty strings are replaced with zero vectors and never sent to the API.
+
+        Args:
+            client: HTTP client to use for the embedding API call.
+            texts: List of text strings to embed (may include empty strings).
+            max_retries: Number of attempts before re-raising the last exception.
+
+        Returns:
+            List of embedding vectors (one per input text), with zero vectors for empties.
+
+        Raises:
+            httpx.HTTPStatusError: If all retries are exhausted due to API errors.
+        """
         empty_indices = {i for i, t in enumerate(texts) if not t.strip()}
         non_empty = [t for t in texts if t.strip()]
 

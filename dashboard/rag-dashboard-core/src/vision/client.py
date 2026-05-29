@@ -36,6 +36,14 @@ class OpenAICompatVisionClient:
         max_retries: int = 3,
         retry_base_s: float = 1.0,
     ) -> None:
+        """Initialize the vision client from settings.
+
+        Args:
+            settings: Application settings providing VLM endpoint, API key, and model.
+            transport: Optional custom httpx transport (useful for testing).
+            max_retries: Maximum number of retry attempts on transient failures.
+            retry_base_s: Base sleep duration in seconds for exponential backoff.
+        """
         self._base_url = settings.vision_external_base_url.rstrip("/")
         self._api_key = settings.vision_external_api_key
         self._model = settings.vision_external_model
@@ -45,6 +53,20 @@ class OpenAICompatVisionClient:
         self._retry_base_s = retry_base_s
 
     async def generate(self, prompt: str, image_b64: str, *, json_mode: bool) -> str:
+        """Send a multimodal generation request with retry and return the response text.
+
+        Args:
+            prompt: Text instruction to guide the VLM.
+            image_b64: Base64-encoded PNG image data.
+            json_mode: If True, request JSON-object response format from the model.
+
+        Returns:
+            Generated response string from the VLM.
+
+        Raises:
+            VisionTimeoutError: If the request exceeds the configured timeout.
+            VisionError: On connection failures, non-2xx responses, or unexpected payloads.
+        """
         payload: dict[str, object] = {
             "model": self._model,
             "messages": [
@@ -111,6 +133,11 @@ class OpenAICompatVisionClient:
         raise VisionError(str(last_exc)) from last_exc
 
     def _build_client(self) -> httpx.AsyncClient:
+        """Construct an httpx.AsyncClient with the configured timeout and optional transport.
+
+        Returns:
+            Configured httpx.AsyncClient ready for use as a context manager.
+        """
         kwargs: dict[str, object] = {"timeout": self._timeout}
         if self._transport is not None:
             kwargs["transport"] = self._transport

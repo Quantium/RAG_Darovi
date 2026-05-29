@@ -32,6 +32,7 @@ EXPECTED_FILE_RECORD_COLUMNS = {
 
 
 def test_file_records_schema_contract() -> None:
+    """Schema contract test: verify that file_records contains all required pipeline columns."""
     conn = psycopg2.connect(DATABASE_DSN)
     try:
         with conn.cursor() as cur:

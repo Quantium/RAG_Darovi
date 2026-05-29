@@ -19,11 +19,25 @@ class Chunk:
 
 class DocumentChunker:
     def __init__(self, max_tokens: int = 512, overlap: int = 50) -> None:
+        """Initialize the chunker with a maximum token size and overlap.
+
+        Args:
+            max_tokens: Maximum number of tokens per chunk.
+            overlap: Number of tokens to repeat at the start of each subsequent chunk.
+        """
         self._max_tokens = max_tokens
         self._overlap = overlap
         self._enc = tiktoken.get_encoding("cl100k_base")
 
     def _count_tokens(self, text: str) -> int:
+        """Return the number of cl100k tokens in the given text.
+
+        Args:
+            text: Text string to tokenize.
+
+        Returns:
+            Token count as an integer.
+        """
         return len(self._enc.encode(text))
 
     def chunk(self, text: str, source_file_id: str, source_name: str, document_type: str) -> list[Chunk]:
@@ -45,6 +59,17 @@ class DocumentChunker:
         return chunks
 
     def _chunk_doc(self, text: str, source_file_id: str, source_name: str, doc_type: str) -> list[Chunk]:
+        """Chunk a DOCX/text document by splitting on Markdown headings.
+
+        Args:
+            text: Extracted Markdown text of the document.
+            source_file_id: Unique identifier of the source file.
+            source_name: Display name of the source file.
+            doc_type: Document type string (e.g. 'doc').
+
+        Returns:
+            List of Chunk instances with section titles from the headings.
+        """
         # Split by headings
         sections = re.split(r"^(#+ .*)$", text, flags=re.MULTILINE)
 
@@ -82,6 +107,19 @@ class DocumentChunker:
         return results
 
     def _chunk_pdf(self, text: str, source_file_id: str, source_name: str, doc_type: str) -> list[Chunk]:
+        """Chunk a PDF document by splitting on '--- PAGE N ---' markers.
+
+        Falls back to _chunk_fallback if no page markers are found.
+
+        Args:
+            text: Extracted text from the PDF, with page markers inserted.
+            source_file_id: Unique identifier of the source file.
+            source_name: Display name of the source file.
+            doc_type: Document type string (e.g. 'pdf').
+
+        Returns:
+            List of Chunk instances with page numbers set.
+        """
         # Split by page markers
         pages = re.split(r"--- PAGE (\d+) ---", text)
 
@@ -104,6 +142,19 @@ class DocumentChunker:
         return results
 
     def _chunk_sheet(self, text: str, source_file_id: str, source_name: str, doc_type: str) -> list[Chunk]:
+        """Chunk a spreadsheet by splitting on '## Sheet: <name>' headers and grouping rows.
+
+        Falls back to _chunk_fallback if no sheet headers are found.
+
+        Args:
+            text: Extracted Markdown text from the XLSX, with sheet headers.
+            source_file_id: Unique identifier of the source file.
+            source_name: Display name of the source file.
+            doc_type: Document type string (e.g. 'sheet').
+
+        Returns:
+            List of Chunk instances grouped by row blocks within each sheet.
+        """
         # Split by sheet headers
         sheets = re.split(r"## Sheet: (.*?)\n", text)
 
@@ -163,10 +214,31 @@ class DocumentChunker:
         return results
 
     def _chunk_fallback(self, text: str, source_file_id: str, source_name: str, doc_type: str) -> list[Chunk]:
+        """Chunk text using token-based sliding window when no structure is detected.
+
+        Args:
+            text: Raw text to chunk.
+            source_file_id: Unique identifier of the source file.
+            source_name: Display name of the source file.
+            doc_type: Document type string.
+
+        Returns:
+            List of Chunk instances with empty section titles.
+        """
         sub_chunks = self._split_with_overlap(text, self._max_tokens, self._overlap)
         return [Chunk(sc, source_file_id, source_name, doc_type, "", i) for i, sc in enumerate(sub_chunks)]
 
     def _split_with_overlap(self, text: str, max_tokens: int, overlap: int) -> list[str]:
+        """Tokenize text and split it into overlapping chunks of max_tokens.
+
+        Args:
+            text: Text to split.
+            max_tokens: Maximum number of tokens per chunk.
+            overlap: Number of trailing tokens from the previous chunk to prepend to the next.
+
+        Returns:
+            List of decoded text strings, one per chunk.
+        """
         tokens = self._enc.encode(text)
         if not tokens:
             return []

@@ -14,12 +14,14 @@ from src.metadata.repository import MetadataRepository, SyncMetadataRepository
 
 class TestMetadataRepository:
     async def test_create_file_record(self, db_session):
+        """Verify a new file record is created with 'pending' status and correct drive_file_id."""
         repo = MetadataRepository(db_session)
         record = await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         assert record.status == "pending"
         assert record.drive_file_id == "abc123"
 
     async def test_get_file_by_drive_id(self, db_session):
+        """Verify get_file retrieves a previously created record by its drive_file_id."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         record = await repo.get_file("abc123")
@@ -27,6 +29,7 @@ class TestMetadataRepository:
         assert record.name == "test.pdf"
 
     async def test_update_status(self, db_session):
+        """Verify update_status correctly changes the record's status field."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         await repo.update_status("abc123", "downloaded")
@@ -34,6 +37,7 @@ class TestMetadataRepository:
         assert record.status == "downloaded"
 
     async def test_update_status_with_error(self, db_session):
+        """Verify update_status stores the error_message alongside the 'failed' status."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         await repo.update_status("abc123", "failed", error_message="Download timeout")
@@ -42,6 +46,7 @@ class TestMetadataRepository:
         assert record.error_message == "Download timeout"
 
     async def test_list_files_by_status(self, db_session):
+        """Verify list_by_status filters records correctly by the given status value."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="a", name="a.pdf", mime_type="application/pdf")
         await repo.create_file_record(drive_file_id="b", name="b.pdf", mime_type="application/pdf")
@@ -51,6 +56,7 @@ class TestMetadataRepository:
         assert results[0].drive_file_id == "b"
 
     async def test_upsert_on_conflict(self, db_session):
+        """Verify upsert_file updates the name when a record with the same drive_file_id exists."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="old.pdf", mime_type="application/pdf")
         await repo.upsert_file(drive_file_id="abc123", name="new.pdf", mime_type="application/pdf")
@@ -58,6 +64,7 @@ class TestMetadataRepository:
         assert record.name == "new.pdf"
 
     async def test_update_chunk_count(self, db_session):
+        """Verify update_chunk_count persists the new chunk count to the record."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         await repo.update_chunk_count("abc123", 42)
@@ -65,6 +72,7 @@ class TestMetadataRepository:
         assert record.chunk_count == 42
 
     async def test_update_raw_stage(self, db_session):
+        """Verify update_raw_stage persists MinIO key, checksum, version, status, and synced timestamp."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         await repo.update_raw_stage(
@@ -83,6 +91,7 @@ class TestMetadataRepository:
         assert record.raw_synced_at is not None
 
     async def test_update_text_stage_and_list_ready_for_embedding(self, db_session):
+        """Verify update_text_stage sets ready_for_embedding and list_ready_for_embedding returns the file."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="abc123", name="test.pdf", mime_type="application/pdf")
         await repo.update_text_stage(
@@ -98,11 +107,13 @@ class TestMetadataRepository:
         assert ready[0].text_extracted_at is not None
 
     async def test_get_or_create_page_token(self, db_session):
+        """Verify get_page_token returns a non-None value, creating a blank entry on first call."""
         repo = MetadataRepository(db_session)
         token = await repo.get_page_token()
         assert token is not None
 
     async def test_update_page_token(self, db_session):
+        """Verify update_page_token persists the new token and get_page_token reflects it."""
         repo = MetadataRepository(db_session)
         await repo.update_page_token("new-token-123")
         token = await repo.get_page_token()
@@ -111,6 +122,7 @@ class TestMetadataRepository:
 
 class TestSyncMetadataRepositoryDialectSafety:
     async def test_update_page_token_uses_postgresql_insert_for_postgres_dialect(self):
+        """Verify update_page_token uses a PostgreSQL-specific insert dialect for Postgres sessions."""
         session = MagicMock()
         session.bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
         repo = SyncMetadataRepository(session)
@@ -121,6 +133,7 @@ class TestSyncMetadataRepositoryDialectSafety:
         assert isinstance(stmt, PostgresInsert)
 
     async def test_update_page_token_uses_sqlite_insert_for_sqlite_dialect(self):
+        """Verify update_page_token uses a SQLite-specific insert dialect for SQLite sessions."""
         session = MagicMock()
         session.bind = SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
         repo = SyncMetadataRepository(session)

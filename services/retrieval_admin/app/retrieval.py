@@ -47,12 +47,32 @@ def _extract_keywords(query: str) -> list[str]:
 
 class Retriever:
     def __init__(self, settings: Settings, cache: Any | None = None) -> None:
+        """Initialize the retriever, connecting to Milvus and optionally wiring up Redis caching.
+
+        Args:
+            settings: Application settings with Milvus, embedding, and cache configuration.
+            cache: Optional Redis client used for caching retrieval results.
+        """
         self._settings = settings
         self._cache = cache
         self._cache_ttl = 3600
         connections.connect(host=settings.milvus_host, port=settings.milvus_port)
 
     async def retrieve(self, query: str, top_k: int = 10, document_type: str | None = None) -> list[RetrievedChunk]:
+        """Retrieve relevant document chunks using vector search and a keyword fallback.
+
+        Checks Redis for a cached result before querying Milvus. Falls back to keyword
+        search for proper nouns and alphanumeric codes not well-served by vector similarity.
+        Results are sorted by score and capped at top_k * 2 to give the LLM more context.
+
+        Args:
+            query: Natural-language query to embed and search.
+            top_k: Number of vector search results to request from Milvus.
+            document_type: Optional Milvus partition name to restrict the search scope.
+
+        Returns:
+            Ranked list of RetrievedChunk instances (up to top_k * 2 items).
+        """
         if not query.strip():
             return []
         cache_key = None
@@ -144,6 +164,17 @@ class Retriever:
         return result
 
     async def _embed_query(self, query: str) -> list[float]:
+        """Call the embedding API to obtain a dense vector for the given query.
+
+        Args:
+            query: Text to embed.
+
+        Returns:
+            List of float values representing the query embedding.
+
+        Raises:
+            httpx.HTTPStatusError: If the embedding API returns a non-2xx response.
+        """
         headers = {"Authorization": f"Bearer {self._settings.embed_api_key.get_secret_value()}"}
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(

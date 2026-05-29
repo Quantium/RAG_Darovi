@@ -16,6 +16,11 @@ logger = structlog.get_logger()
 
 class PdfConverter(FileConverter):
     def __init__(self, settings: Settings | None = None) -> None:
+        """Initialize the PDF converter with OCR and vision settings.
+
+        Args:
+            settings: Optional application settings; defaults to a fresh Settings() if not provided.
+        """
         self._settings = settings or Settings()
 
     def convert(self, raw_bytes: bytes, file_name: str, mime_type: str) -> str:

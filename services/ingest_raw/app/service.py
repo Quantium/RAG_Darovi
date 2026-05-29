@@ -21,12 +21,27 @@ class IngestRawService:
         source: SourceAdapter,
         storage: MinIOStorage,
     ) -> None:
+        """Initialize the ingestion service with its dependencies.
+
+        Args:
+            settings: Application settings controlling page size and other parameters.
+            repo: Metadata repository for upserting and updating file records.
+            source: Source adapter that provides file listings and downloads.
+            storage: MinIO storage client for uploading raw files.
+        """
         self._settings = settings
         self._repo = repo
         self._source = source
         self._storage = storage
 
     def run_once(self) -> dict[str, int]:
+        """Scan the source for changed files and upload any new or updated ones to MinIO.
+
+        Skips files whose source version matches the already-synced version in the database.
+
+        Returns:
+            Dict with 'scanned', 'updated', and 'skipped' counts for the run.
+        """
         self._storage.ensure_bucket()
         scanned = 0
         updated = 0
@@ -62,6 +77,14 @@ class IngestRawService:
         return {"scanned": scanned, "updated": updated, "skipped": skipped}
 
     def _is_unchanged(self, source_file: SourceFile) -> bool:
+        """Return True if the file is already synced and its source version has not changed.
+
+        Args:
+            source_file: Source file metadata to compare against the stored record.
+
+        Returns:
+            True if the file is up-to-date in the database, False if it needs to be re-ingested.
+        """
         record = self._repo.get_file(source_file.file_id)
         if record is None:
             return False
@@ -69,6 +92,16 @@ class IngestRawService:
 
 
 def _to_datetime(source_version: str) -> datetime | None:
+    """Parse an ISO-8601 source version string into a timezone-aware datetime.
+
+    Falls back to the current UTC time if parsing fails.
+
+    Args:
+        source_version: Source version string, typically an ISO-8601 timestamp ending in 'Z'.
+
+    Returns:
+        Parsed UTC datetime, or the current UTC time if the string cannot be parsed.
+    """
     try:
         if source_version.endswith("Z"):
             return datetime.fromisoformat(source_version.replace("Z", "+00:00"))

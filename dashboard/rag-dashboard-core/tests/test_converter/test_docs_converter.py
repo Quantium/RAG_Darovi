@@ -7,11 +7,13 @@ from src.converter.docs_converter import DocsConverter
 
 class TestDocsConverter:
     def test_export_google_doc_as_text(self):
+        """Verify DocsConverter returns plain text from a text/plain document."""
         converter = DocsConverter()
         text = converter.convert(b"Hello world", "doc.txt", "text/plain")
         assert "Hello world" in text
 
     def test_preserves_heading_structure(self):
+        """Verify DocsConverter preserves Markdown heading syntax in the output."""
         converter = DocsConverter()
         raw = b"# Title\n\nParagraph text\n\n## Section\n\nMore text"
         text = converter.convert(raw, "doc.txt", "text/plain")
@@ -19,6 +21,7 @@ class TestDocsConverter:
         assert "## Section" in text
 
     def test_handles_empty_document(self):
+        """Verify DocsConverter returns an empty string for empty byte input."""
         converter = DocsConverter()
         text = converter.convert(b"", "empty.txt", "text/plain")
         assert text == ""

@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies WebSocket streaming — query submission, token streaming, and send-button state. */
 test.describe("send and stream", () => {
   test("submits a query, streams assistant tokens, re-enables send", async ({ page }) => {
     await page.goto("/");

@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies the RAW Data tab shows extracted text and that the show-more toggle works. */
 test.describe("raw data tab", () => {
   test("shows extracted document data", async ({ page }) => {
     await page.goto("/");

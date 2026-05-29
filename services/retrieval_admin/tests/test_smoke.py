@@ -8,6 +8,7 @@ import app.api as api_module
 
 
 def test_health() -> None:
+    """Smoke test: verify the retrieval admin service health endpoint responds with HTTP 200."""
     with patch.object(api_module, "MetadataService", autospec=True) as metadata_cls, patch.object(
         api_module, "Retriever", autospec=True
     ) as retriever_cls, patch.object(api_module, "LLMService", autospec=True) as llm_cls, patch.object(

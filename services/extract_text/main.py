@@ -16,6 +16,11 @@ logger = structlog.get_logger()
 
 
 def main() -> None:
+    """Bootstrap and run the Extract Text service.
+
+    Wires up all dependencies, optionally starts an HTTP trigger server in a daemon thread,
+    optionally runs one extraction pass on startup, and then enters the cron loop.
+    """
     settings = Settings()
     repo = create_repository(settings)
     storage = MinIOStorage(settings)
@@ -26,6 +31,7 @@ def main() -> None:
         port = int(settings.extract_text_http_port)
 
         def _run_http() -> None:
+            """Start the uvicorn server for the HTTP trigger API on the configured port."""
             uvicorn.run(http_app, host="0.0.0.0", port=port, log_level="warning")
 
         threading.Thread(target=_run_http, daemon=True).start()

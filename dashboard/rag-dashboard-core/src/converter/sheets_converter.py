@@ -32,6 +32,14 @@ class SheetsConverter(FileConverter):
             raise
 
     def _process_multi_sheet(self, content: str) -> str:
+        """Parse a multi-sheet CSV export and format each sheet section.
+
+        Args:
+            content: Full CSV content string with embedded sheet headers.
+
+        Returns:
+            Double-newline-separated Markdown sections, one per sheet.
+        """
         sections = []
         # Split by what looks like sheet headers
         # This is a bit naive but should work for the provided test cases
@@ -52,6 +60,15 @@ class SheetsConverter(FileConverter):
         return "\n\n".join(sections)
 
     def _process_single_sheet(self, csv_text: str, sheet_name: str) -> str:
+        """Format a single sheet's CSV text as a Markdown table section.
+
+        Args:
+            csv_text: CSV-formatted content for a single sheet.
+            sheet_name: Display name used as the Markdown section heading.
+
+        Returns:
+            Markdown string with a '## Sheet: <name>' heading and pipe-separated rows.
+        """
         if not csv_text.strip():
             return f"## Sheet: {sheet_name}\n\n(Empty)"
 

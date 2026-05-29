@@ -8,6 +8,11 @@ from .settings import Settings
 
 class LLMService:
     def __init__(self, settings: Settings) -> None:
+        """Initialize the LLM client using DeepSeek (or a compatible OpenAI-protocol endpoint).
+
+        Args:
+            settings: Application settings containing the API key, model name, and generation params.
+        """
         api_key = (
             settings.deepseek_api_key.get_secret_value()
             or settings.llm_api_key.get_secret_value()
@@ -44,10 +49,30 @@ class LLMService:
     )
 
     def _is_aggregate_query(self, query: str) -> bool:
+        """Return True if the query appears to request an aggregation or full listing.
+
+        Args:
+            query: Natural-language user query.
+
+        Returns:
+            True when the query contains aggregate keywords, False otherwise.
+        """
         q = query.lower()
         return any(kw in q for kw in self._AGGREGATE_KEYWORDS)
 
     async def answer(self, *, query: str, context: str, history: list[ConversationTurn]) -> str:
+        """Generate a grounded answer from the LLM using retrieved context and conversation history.
+
+        Aggregate queries receive the full allowed context; specific queries receive half to save tokens.
+
+        Args:
+            query: The user's current question.
+            context: Retrieved document context to ground the answer.
+            history: Prior conversation turns to provide multi-turn coherence.
+
+        Returns:
+            The model's text response, or an empty string if the response is empty.
+        """
         # Aggregate queries get the full context window; specific queries get half to save tokens
         char_limit = self._max_context_chars if self._is_aggregate_query(query) else self._max_context_chars // 2
         truncated = context[:char_limit]

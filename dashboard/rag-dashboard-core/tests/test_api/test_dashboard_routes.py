@@ -13,6 +13,7 @@ from src.api.dashboard_schemas import DashboardState
 
 @pytest.mark.integration
 async def test_dashboard_state_returns_contract(app_mocked):
+    """Verify GET /dashboard/state returns a valid DashboardState schema with correct card counts."""
     from src.metadata.repository import MetadataRepository
 
     mock_redis = app_mocked.state.redis_cache
@@ -63,6 +64,7 @@ async def test_dashboard_state_returns_contract(app_mocked):
 
 @pytest.mark.integration
 async def test_dashboard_re_ingest_requires_confirm(app_mocked):
+    """Verify POST /dashboard/re-ingest returns HTTP 400 without the X-Dashboard-Confirm header."""
     async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
         res = await client.post("/dashboard/re-ingest")
         assert res.status_code == 400

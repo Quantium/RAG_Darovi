@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies that selecting a document-type filter sends the correct document_type in the WebSocket payload. */
 test.describe("document type filters", () => {
   test("sends selected document_type with the WebSocket payload", async ({ page, baseURL }) => {
     await page.goto("/");

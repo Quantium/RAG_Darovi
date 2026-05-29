@@ -18,18 +18,37 @@ class LocalFolderDownloader:
     """Downloader implementation that ingests files from a local folder."""
 
     def __init__(self, storage: StorageBackend, metadata_repo: Any, settings: Settings) -> None:
+        """Initialize the downloader with storage, metadata repo, and settings.
+
+        Args:
+            storage: Storage backend for uploading raw file bytes.
+            metadata_repo: Repository for reading and updating file records.
+            settings: Application settings providing the local source folder path.
+        """
         self._storage = storage
         self._metadata_repo = metadata_repo
         self._settings = settings
         self._source_folder = Path(settings.local_source_folder).expanduser().resolve()
 
     async def full_sync(self) -> list[dict[str, Any]]:
+        """Scan all files in the source folder and update the sync state token.
+
+        Returns:
+            List of file metadata dicts for all discovered files.
+        """
         files = self._scan_files()
         await self._metadata_repo.update_page_token(self._snapshot_token(files))
         logger.info("local.full_sync.complete", count=len(files), folder=str(self._source_folder))
         return files
 
     async def incremental_sync(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Detect new, modified, and deleted files relative to the stored state.
+
+        Returns:
+            Tuple of (changed_files, deleted_ids). changed_files contains metadata
+            dicts for new and modified files; deleted_ids contains IDs of files no
+            longer present on disk.
+        """
         files = self._scan_files()
         current_by_id = {file_meta["id"]: file_meta for file_meta in files}
 
@@ -53,6 +72,14 @@ class LocalFolderDownloader:
         return changed_files, deleted_ids
 
     async def download_file(self, file_meta: dict[str, Any]) -> str | None:
+        """Upload a local file to MinIO raw bucket if its modification time has changed.
+
+        Args:
+            file_meta: File metadata dict with 'id', 'name', 'mimeType', and 'modifiedTime'.
+
+        Returns:
+            The MinIO raw key on successful upload, or None if the file is unchanged.
+        """
         file_id = file_meta["id"]
         name = file_meta["name"]
         mime_type = file_meta["mimeType"]
@@ -81,6 +108,15 @@ class LocalFolderDownloader:
         return raw_key
 
     def _scan_files(self) -> list[dict[str, Any]]:
+        """Recursively scan the source folder and return metadata dicts for all files.
+
+        Returns:
+            Sorted list of file metadata dicts with 'id', 'name', 'mimeType', 'modifiedTime',
+            and 'localPath' for each discovered regular file.
+
+        Raises:
+            RuntimeError: If LOCAL_SOURCE_FOLDER is not set or is not a valid directory.
+        """
         if not self._settings.local_source_folder:
             raise RuntimeError("LOCAL_SOURCE_FOLDER is required when INGEST_SOURCE=local")
         if not self._source_folder.exists() or not self._source_folder.is_dir():
@@ -104,10 +140,26 @@ class LocalFolderDownloader:
 
     @staticmethod
     def _snapshot_token(files: list[dict[str, Any]]) -> str:
+        """Build a compact snapshot string for the current set of files.
+
+        Args:
+            files: List of file metadata dicts, each with 'id' and 'modifiedTime'.
+
+        Returns:
+            Pipe-delimited 'id:modifiedTime' string for all files.
+        """
         return "|".join(f"{item['id']}:{item['modifiedTime']}" for item in files)
 
     @staticmethod
     def _to_iso_z(value: datetime | str) -> str:
+        """Normalize a datetime or string to an ISO-8601 string ending with 'Z'.
+
+        Args:
+            value: Either a datetime object or an ISO-8601 string.
+
+        Returns:
+            ISO-8601 string with the timezone expressed as 'Z' (UTC).
+        """
         if isinstance(value, datetime):
             return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
         text = str(value)

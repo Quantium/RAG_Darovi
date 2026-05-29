@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies tab switching shows the correct panels and that table sort and pagination work correctly. */
 test.describe("table tabs visibility and controls", () => {
   test("hides dashboard when Document status tab is active", async ({ page }) => {
     await page.goto("/");

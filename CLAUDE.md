@@ -68,6 +68,74 @@ make qa-all        # all three gates
 
 ---
 
+## Python Tooling — always use `uv`
+
+All Python commands must go through `uv`. Never call `pip`, `python`, or `python -m venv` directly.
+
+### Running scripts and modules
+
+```bash
+# Instead of: python script.py
+uv run script.py
+
+# Instead of: python -m pytest
+uv run pytest
+
+# Instead of: python -m alembic upgrade head
+uv run alembic upgrade head
+
+# Pass extra args normally
+uv run script.py --arg value
+```
+
+### Installing dependencies
+
+```bash
+# Instead of: pip install -r requirements.txt
+uv pip install -r requirements.txt
+
+# Exact sync — also removes packages not in the file
+uv pip sync requirements.txt
+
+# Install a single package
+uv pip install httpx
+
+# Install with extras
+uv pip install "fastapi[standard]"
+```
+
+### Locking / compiling requirements
+
+```bash
+# Pin all transitive deps from requirements.in → requirements.txt
+uv pip compile requirements.in -o requirements.txt
+
+# Upgrade a specific package while keeping the rest pinned
+uv pip compile requirements.in -o requirements.txt --upgrade-package httpx
+```
+
+### Virtual environments
+
+```bash
+# Instead of: python -m venv .venv
+uv venv
+
+# With a specific Python version
+uv venv --python 3.12
+```
+
+### Project mode (pyproject.toml)
+
+```bash
+uv add requests          # add dependency + update lockfile
+uv remove requests       # remove dependency
+uv sync                  # install all deps from lockfile into .venv
+uv sync --no-dev         # skip dev dependencies
+uv lock --upgrade-package requests   # bump one package in the lockfile
+```
+
+---
+
 ## Pipeline State Machine (`file_records`)
 
 Every file progresses through PostgreSQL `file_records` columns. Never modify these states manually without understanding the full chain.

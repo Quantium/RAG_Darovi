@@ -8,6 +8,7 @@ from src.converter.xlsx_converter import XlsxConverter
 class TestXlsxConverter:
     @patch("src.converter.xlsx_converter.openpyxl.load_workbook")
     def test_convert_xlsx(self, mock_load):
+        """Verify XLSX conversion produces sheet name, header, and data row in the output."""
         mock_wb = MagicMock()
         mock_sheet = MagicMock(title="Sheet1")
         mock_sheet.iter_rows.return_value = [("Header",), ("Value",)]

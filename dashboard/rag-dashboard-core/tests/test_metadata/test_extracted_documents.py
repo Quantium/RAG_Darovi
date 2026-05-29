@@ -10,6 +10,7 @@ from src.metadata.repository import MetadataRepository
 
 class TestExtractedDocumentRepository:
     async def test_upsert_inserts_new_row(self, db_session):
+        """Verify upsert_extracted_document inserts a new row with all provided field values."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="file-1", name="invoice.pdf", mime_type="application/pdf")
 
@@ -33,6 +34,7 @@ class TestExtractedDocumentRepository:
         assert row.extras == {"po_number": "PO-9001"}
 
     async def test_upsert_updates_existing_row(self, db_session):
+        """Verify a second upsert overwrites the previous values for the same drive_file_id."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="file-2", name="x.pdf", mime_type="application/pdf")
 
@@ -45,6 +47,7 @@ class TestExtractedDocumentRepository:
         assert row.parties == ["P1"]
 
     async def test_upsert_handles_none_optional_fields(self, db_session):
+        """Verify upsert_extracted_document with no optional fields stores defaults (None, [], {})."""
         repo = MetadataRepository(db_session)
         await repo.create_file_record(drive_file_id="file-3", name="x.pdf", mime_type="application/pdf")
 

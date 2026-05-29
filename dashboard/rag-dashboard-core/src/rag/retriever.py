@@ -30,6 +30,13 @@ class Retriever:
         vector_store: MilvusStore,
         cache: Any | None = None,
     ) -> None:
+        """Initialize the retriever with an embedder, vector store, and optional Redis cache.
+
+        Args:
+            embedder: BatchEmbedder used to convert queries to dense vectors.
+            vector_store: MilvusStore used to search for nearest-neighbor chunks.
+            cache: Optional Redis client for caching retrieval results.
+        """
         self._embedder = embedder
         self._vector_store = vector_store
         self._cache = cache  # Redis client
@@ -41,6 +48,16 @@ class Retriever:
         top_k: int = 10,
         document_type: str | None = None,
     ) -> list[RetrievedChunk]:
+        """Embed the query, search Milvus, and return ranked chunks with Redis caching.
+
+        Args:
+            query: Natural-language query to embed and search.
+            top_k: Maximum number of results to retrieve from Milvus.
+            document_type: Optional partition name to restrict the search scope.
+
+        Returns:
+            List of RetrievedChunk instances ordered by relevance score.
+        """
         if not query.strip():
             return []
 

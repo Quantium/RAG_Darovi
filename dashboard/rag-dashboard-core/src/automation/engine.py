@@ -20,6 +20,14 @@ class AutomationEngine:
         db_writer: DBWriter,
         configs: list[AutomationConfig],
     ) -> None:
+        """Initialize the automation engine with its collaborators and configurations.
+
+        Args:
+            retriever: Retriever used to fetch context for each automation prompt.
+            llm: LLM client for generating automation responses.
+            db_writer: DBWriter for executing generated SQL statements.
+            configs: List of automation configurations to evaluate on each trigger.
+        """
         self._retriever = retriever
         self._llm = llm
         self._db_writer = db_writer

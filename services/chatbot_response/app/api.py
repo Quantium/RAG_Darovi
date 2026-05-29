@@ -25,10 +25,29 @@ from .settings import Settings
 
 
 def _pg_url(db_url: str) -> str:
+    """Convert a SQLAlchemy-style PostgreSQL URL to a plain psycopg2-compatible URL.
+
+    Args:
+        db_url: SQLAlchemy connection string (may include driver prefix).
+
+    Returns:
+        URL with the 'postgresql+psycopg2://' prefix replaced by 'postgresql://'.
+    """
     return db_url.replace("postgresql+psycopg2://", "postgresql://")
 
 
 def _save_interaction_sync(db_url: str, conversation_id: str, question: str, answer: str) -> int:
+    """Persist a chat interaction to the database and return its generated row ID.
+
+    Args:
+        db_url: SQLAlchemy-style database connection URL.
+        conversation_id: UUID identifying the ongoing conversation.
+        question: The user's query text.
+        answer: The assistant's response text.
+
+    Returns:
+        The auto-generated primary key of the inserted chat_interactions row.
+    """
     conn = psycopg2.connect(_pg_url(db_url))
     try:
         with conn.cursor() as cur:
@@ -45,6 +64,14 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
 
 
 def _update_rating_sync(db_url: str, interaction_id: int, rating: str, correction: str | None) -> None:
+    """Update the rating and optional correction for an existing chat interaction.
+
+    Args:
+        db_url: SQLAlchemy-style database connection URL.
+        interaction_id: Primary key of the chat_interactions row to update.
+        rating: User-provided rating value (e.g. 'good', 'bad').
+        correction: Optional corrected answer text provided by the user.
+    """
     conn = psycopg2.connect(_pg_url(db_url))
     try:
         with conn.cursor() as cur:
@@ -65,6 +92,17 @@ _AGGREGATE_KEYWORDS = (
 
 
 def _aggregate_top_k(query: str, settings: Settings) -> int:
+    """Return the appropriate retrieval top-k based on whether the query is aggregate.
+
+    Aggregate queries (counts, listings) use a higher top-k to capture more results.
+
+    Args:
+        query: The user's natural-language query.
+        settings: Application settings carrying the configured top-k values.
+
+    Returns:
+        Top-k integer to pass to the retrieval service.
+    """
     q = query.lower()
     if any(kw in q for kw in _AGGREGATE_KEYWORDS):
         return settings.retrieval_top_k_aggregate
@@ -72,6 +110,16 @@ def _aggregate_top_k(query: str, settings: Settings) -> int:
 
 
 async def verify_api_key(request: Request) -> None:
+    """FastAPI dependency that raises HTTP 401 when the X-API-Key header is invalid.
+
+    A missing or blank configured key disables the check entirely.
+
+    Args:
+        request: Incoming FastAPI request carrying the header and app state.
+
+    Raises:
+        HTTPException: 401 if a key is configured and the incoming header does not match.
+    """
     settings: Settings = request.app.state.settings
     configured = settings.api_key.get_secret_value()
     if not configured:
@@ -82,6 +130,11 @@ async def verify_api_key(request: Request) -> None:
 
 
 def create_app() -> FastAPI:
+    """Build and configure the FastAPI application with all routes and middleware.
+
+    Returns:
+        Fully configured FastAPI instance ready to serve requests.
+    """
     app = FastAPI(title="Chatbot Response Service", version="1.0.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -95,10 +148,22 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        """Return a simple liveness check payload."""
         return {"status": "ok"}
 
     @app.post("/auth/login", response_model=LoginResponse)
     async def login(body: LoginRequest) -> LoginResponse:
+        """Authenticate a user and return a session token stored in Redis.
+
+        Args:
+            body: Login credentials containing username and password.
+
+        Returns:
+            LoginResponse with the session token and username.
+
+        Raises:
+            HTTPException: 401 if credentials are invalid.
+        """
         db_url = settings.database_url_sync.get_secret_value()
         ok = await verify_user(db_url, body.username, body.password)
         if not ok:
@@ -108,6 +173,14 @@ def create_app() -> FastAPI:
 
     @app.post("/auth/logout")
     async def logout(body: LogoutRequest) -> dict[str, str]:
+        """Invalidate the session token and remove it from Redis.
+
+        Args:
+            body: Logout request containing the session token to revoke.
+
+        Returns:
+            Status dict confirming the logout.
+        """
         delete_session(redis_client, body.token)
         return {"status": "ok"}
 
@@ -117,6 +190,15 @@ def create_app() -> FastAPI:
         dependencies=[Depends(verify_api_key), Depends(require_session)],
     )
     async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+        """Handle a single-turn chat request: retrieve context, call LLM, persist interaction.
+
+        Args:
+            body: Chat request containing the query, optional conversation ID, and document type filter.
+            request: Incoming FastAPI request carrying app state and headers.
+
+        Returns:
+            ChatResponse with the answer, source references, conversation ID, and interaction ID.
+        """
         import asyncio
         retrieval: RetrievalClient = app.state.retrieval
         llm: LLMService = app.state.llm
@@ -138,6 +220,14 @@ def create_app() -> FastAPI:
 
     @app.post("/rate", dependencies=[Depends(require_session)])
     async def rate(body: RateRequest) -> dict[str, str]:
+        """Record the user's rating (and optional correction) for a previous interaction.
+
+        Args:
+            body: Rating payload with interaction ID, rating value, and optional correction.
+
+        Returns:
+            Status dict confirming the update.
+        """
         import asyncio
         db_url = settings.database_url_sync.get_secret_value()
         loop = asyncio.get_event_loop()
@@ -148,6 +238,14 @@ def create_app() -> FastAPI:
 
     @app.websocket("/ws/chat")
     async def ws_chat(ws: WebSocket) -> None:
+        """Handle a streaming WebSocket chat session, sending tokens as they are generated.
+
+        Validates API key and session token before accepting the connection.
+        Each message with type 'query' triggers retrieval, LLM generation, and token streaming.
+
+        Args:
+            ws: The WebSocket connection instance.
+        """
         settings_ws: Settings = app.state.settings
         configured = settings_ws.api_key.get_secret_value()
         incoming_key = ws.query_params.get("api_key") or ws.headers.get("x-api-key") or ws.headers.get("X-API-Key") or ""
@@ -201,14 +299,17 @@ def create_app() -> FastAPI:
 
     @app.get("/")
     async def index() -> FileResponse:
+        """Serve the chat UI HTML entry point."""
         return FileResponse(static_root / "index.html")
 
     @app.get("/app.js")
     async def js() -> FileResponse:
+        """Serve the chat UI JavaScript bundle."""
         return FileResponse(static_root / "app.js", media_type="application/javascript")
 
     @app.get("/styles.css")
     async def css() -> FileResponse:
+        """Serve the chat UI stylesheet."""
         return FileResponse(static_root / "styles.css", media_type="text/css")
 
     return app

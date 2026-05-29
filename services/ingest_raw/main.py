@@ -17,6 +17,11 @@ logger = structlog.get_logger()
 
 
 def main() -> None:
+    """Bootstrap and run the Ingest Raw service.
+
+    Wires up all dependencies, optionally starts an HTTP trigger server in a daemon thread,
+    optionally runs one ingestion pass on startup, and then enters the cron loop.
+    """
     settings = Settings()
     repo = create_repository(settings)
     source = build_source_adapter(settings)
@@ -28,6 +33,7 @@ def main() -> None:
         port = int(settings.ingest_raw_http_port)
 
         def _run_http() -> None:
+            """Start the uvicorn server for the HTTP trigger API on the configured port."""
             uvicorn.run(http_app, host="0.0.0.0", port=port, log_level="warning")
 
         threading.Thread(target=_run_http, daemon=True).start()

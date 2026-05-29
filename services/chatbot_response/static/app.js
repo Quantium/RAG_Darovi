@@ -1,8 +1,14 @@
 // ── Auth state ────────────────────────────────────────────────────────────────
 const TOKEN_KEY = "chatbot_token";
 
+/** @returns {string|null} The stored session token, or null if not logged in. */
 function getToken() { return localStorage.getItem(TOKEN_KEY); }
+/**
+ * Persist the session token to localStorage.
+ * @param {string} t - Session token received from the login endpoint.
+ */
 function saveToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+/** Remove the session token from localStorage, effectively logging the user out locally. */
 function clearToken() { localStorage.removeItem(TOKEN_KEY); }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -19,11 +25,13 @@ const sourcesEl    = document.getElementById("sources");
 let conversationId = null;
 
 // ── Show/hide sections ────────────────────────────────────────────────────────
+/** Show the chat panel and hide the login section. */
 function showChat() {
   loginSection.hidden = true;
   chatSection.hidden = false;
 }
 
+/** Show the login section and hide the chat panel. */
 function showLogin() {
   loginSection.hidden = false;
   chatSection.hidden = true;
@@ -81,49 +89,32 @@ logoutBtn.addEventListener("click", async () => {
 });
 
 // ── Chat helpers ──────────────────────────────────────────────────────────────
-const USER_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
-const BOT_ICON  = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg>`;
-
-function nowTime() {
-  return new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
-}
-
+/**
+ * Append a chat message bubble to the messages container.
+ *
+ * @param {string} role - Speaker role: 'user' or 'assistant'.
+ * @param {string} text - Message content; Markdown is rendered for assistant messages.
+ * @returns {HTMLElement} The newly created message element.
+ */
 function addMessage(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
-
-  const avatar = document.createElement("div");
-  avatar.className = "msg-avatar";
-  avatar.innerHTML = role === "user" ? USER_ICON : BOT_ICON;
-
-  const body = document.createElement("div");
-  body.className = "msg-body";
-
-  const bubble = document.createElement("div");
-  bubble.className = "msg-bubble";
   if (role === "user") {
-    bubble.textContent = text;
+    el.textContent = text;
   } else {
-    bubble.innerHTML = marked.parse(text);
+    el.innerHTML = marked.parse(text);
   }
-
-  const time = document.createElement("span");
-  time.className = "msg-time";
-  time.textContent = nowTime();
-
-  body.appendChild(bubble);
-  body.appendChild(time);
-  el.appendChild(avatar);
-  el.appendChild(body);
-
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
-
-  // expose bubble so callers can update it
-  el._bubble = bubble;
   return el;
 }
 
+/**
+ * Render the source references table below the chat messages.
+ *
+ * @param {Array<{source_name: string, text_preview: string, score: number, file_url: string|null}>} sources
+ *   Array of source reference objects from the API response.
+ */
 function renderSources(sources) {
   if (!sources || sources.length === 0) {
     sourcesEl.innerHTML = "";
@@ -145,6 +136,12 @@ function renderSources(sources) {
 }
 
 // ── Rating ────────────────────────────────────────────────────────────────────
+/**
+ * Insert a thumbs-up / thumbs-down rating bar above the chat form.
+ * Removes any existing rating bar first to prevent duplicates.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction to rate.
+ */
 function addRatingButtons(interactionId) {
   document.querySelectorAll(".rating-bar").forEach(el => el.remove());
 
@@ -158,10 +155,16 @@ function addRatingButtons(interactionId) {
     btn.addEventListener("click", () => handleRating(btn.dataset.rating, interactionId, bar));
   });
 
-  const inputArea = document.querySelector(".chat-input-area");
-  inputArea.parentNode.insertBefore(bar, inputArea);
+  form.parentNode.insertBefore(bar, form);
 }
 
+/**
+ * Handle a rating button click: submit positive directly or open correction dialog for negative.
+ *
+ * @param {string} rating - 'positive' or 'negative'.
+ * @param {number} interactionId - Primary key of the chat interaction being rated.
+ * @param {HTMLElement} bar - The rating bar element to remove after submission.
+ */
 async function handleRating(rating, interactionId, bar) {
   if (rating === "positive") {
     await postRating(interactionId, "positive", null);
@@ -171,6 +174,13 @@ async function handleRating(rating, interactionId, bar) {
   }
 }
 
+/**
+ * Inject a correction text area into the rating bar for negative feedback.
+ * Does nothing if a dialog is already visible.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction being corrected.
+ * @param {HTMLElement} bar - The rating bar element that will host the dialog.
+ */
 function showCorrectionDialog(interactionId, bar) {
   if (bar.querySelector(".correction-dialog")) return;
 
@@ -191,6 +201,13 @@ function showCorrectionDialog(interactionId, bar) {
   bar.appendChild(dialog);
 }
 
+/**
+ * POST the user's rating and optional correction text to the /rate endpoint.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction.
+ * @param {string} rating - 'positive' or 'negative'.
+ * @param {string|null} correction - Corrected answer text, or null if not provided.
+ */
 async function postRating(interactionId, rating, correction) {
   try {
     await fetch("/rate", {
@@ -235,10 +252,10 @@ form.addEventListener("submit", async (event) => {
     }
     const data = await res.json();
     conversationId = data.conversation_id;
-    assistant._bubble.innerHTML = marked.parse(data.answer);
+    assistant.innerHTML = marked.parse(data.answer);
     renderSources(data.sources);
     addRatingButtons(data.interaction_id);
   } catch (error) {
-    assistant._bubble.textContent = `Error: ${String(error)}`;
+    assistant.textContent = `Error: ${String(error)}`;
   }
 });

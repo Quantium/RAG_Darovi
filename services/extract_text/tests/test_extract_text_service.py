@@ -16,6 +16,7 @@ from app.service import ExtractTextService
 
 
 def test_extract_text_service_skips_when_lock_is_held():
+    """Verify that run_once returns zero counts without processing when the advisory lock is already held."""
     settings = MagicMock()
     settings.extract_text_lock_id = 77
     repo = MagicMock()
@@ -30,6 +31,7 @@ def test_extract_text_service_skips_when_lock_is_held():
 
 
 def test_extract_text_service_processes_changed_raw_files():
+    """Verify that run_once downloads, extracts, uploads, and marks a changed raw file as ready."""
     settings = MagicMock()
     settings.extract_text_lock_id = 77
     settings.extract_text_batch_size = 100

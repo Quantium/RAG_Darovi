@@ -12,6 +12,7 @@ from src.rag.llm_client import create_llm_client, OllamaLLMClient, GeminiLLMClie
 class TestLLMClient:
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_chat_completion_ollama(self, mock_openai, settings):
+        """Verify the Ollama LLM client returns a string response from a mocked completion."""
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = MagicMock(
             choices=[MagicMock(message=MagicMock(content="Hello!"))]
@@ -23,6 +24,7 @@ class TestLLMClient:
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_chat_completion_gemini(self, mock_openai, settings):
+        """Verify the Gemini LLM client returns a string response from a mocked completion."""
         settings_gemini = settings.model_copy(update={"llm_provider": "gemini", "llm_api_key": SecretStr("key")})
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = MagicMock(
@@ -35,6 +37,7 @@ class TestLLMClient:
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_chat_completion_deepseek(self, mock_openai, settings):
+        """Verify the DeepSeek LLM client returns a string response from a mocked completion."""
         settings_ds = settings.model_copy(update={"llm_provider": "deepseek", "llm_api_key": SecretStr("key")})
         mock_client = AsyncMock()
         mock_client.chat.completions.create.return_value = MagicMock(
@@ -47,6 +50,7 @@ class TestLLMClient:
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_deepseek_uses_dedicated_env_key(self, mock_openai, settings):
+        """Verify DeepSeek prefers DEEPSEEK_API_KEY over LLM_API_KEY when both are set."""
         settings_ds = settings.model_copy(
             update={
                 "llm_provider": "deepseek",
@@ -68,11 +72,13 @@ class TestLLMClient:
         assert kwargs["base_url"] == "https://api.deepseek.com/v1/"
 
     def test_provider_selection_from_config(self, settings):
+        """Verify create_llm_client returns an OllamaLLMClient for the default settings provider."""
         llm = create_llm_client(settings)
         assert isinstance(llm, OllamaLLMClient)
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_streaming_response(self, mock_openai, settings):
+        """Verify chat_stream is an async iterable that can be consumed without errors."""
         mock_client = AsyncMock()
         mock_openai.return_value = mock_client
         llm = OllamaLLMClient(settings)
@@ -83,6 +89,7 @@ class TestLLMClient:
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_handles_api_error(self, mock_openai, settings):
+        """Verify the LLM client propagates API exceptions to the caller."""
         mock_client = AsyncMock()
         mock_client.chat.completions.create.side_effect = Exception("API Error")
         mock_openai.return_value = mock_client
@@ -92,6 +99,7 @@ class TestLLMClient:
 
     @patch("src.rag.llm_client.openai.AsyncOpenAI")
     async def test_respects_max_tokens(self, mock_openai, settings):
+        """Verify the max_tokens argument is forwarded to the underlying completion create call."""
         mock_client = AsyncMock()
         mock_openai.return_value = mock_client
         llm = OllamaLLMClient(settings)

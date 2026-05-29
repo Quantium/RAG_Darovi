@@ -16,6 +16,7 @@ from app.sources import SourceFile
 
 
 def test_ingest_raw_service_updates_changed_files():
+    """Verify that run_once uploads and records a new file when no existing record is found."""
     settings = MagicMock()
     settings.ingest_raw_batch_size = 10
     repo = MagicMock()
@@ -42,6 +43,7 @@ def test_ingest_raw_service_updates_changed_files():
 
 
 def test_ingest_raw_service_skips_unchanged_files():
+    """Verify that run_once skips a file whose source version matches the stored synced version."""
     settings = MagicMock()
     settings.ingest_raw_batch_size = 10
     repo = MagicMock()
