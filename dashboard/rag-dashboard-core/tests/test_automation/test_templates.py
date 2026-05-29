@@ -9,6 +9,7 @@ from src.automation.templates import parse_automation, matches_file, AutomationC
 
 class TestAutomationTemplates:
     def test_parse_valid_yaml(self):
+        """Verify parse_automation returns a valid AutomationConfig from a complete YAML string."""
         yaml_str = """
 name: invoice-extractor
 trigger: on_new_file
@@ -25,11 +26,13 @@ action:
         assert config.name == "invoice-extractor"
 
     def test_parse_invalid_yaml(self):
+        """Verify parse_automation raises ValueError when required fields are missing."""
         yaml_str = "name: missing-fields"
         with pytest.raises(ValueError):
             parse_automation(yaml_str)
 
     def test_filter_matches_file(self):
+        """Verify matches_file returns True for a matching MIME+name combo and False otherwise."""
         from src.automation.templates import AutomationFilter
 
         f = AutomationFilter(mime_type="application/pdf", name_pattern="invoice_*")

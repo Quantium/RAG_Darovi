@@ -11,6 +11,11 @@ logger = structlog.get_logger()
 
 class DBWriter:
     def __init__(self, session: AsyncSession) -> None:
+        """Initialize the writer with an async SQLAlchemy session.
+
+        Args:
+            session: Active SQLAlchemy AsyncSession for executing statements.
+        """
         self._session = session
 
     async def execute(self, sql: str) -> None:

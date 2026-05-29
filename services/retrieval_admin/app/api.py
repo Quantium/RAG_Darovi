@@ -24,6 +24,14 @@ from .settings import Settings
 
 
 async def verify_api_key(request: Request) -> None:
+    """FastAPI dependency that raises HTTP 401 when the X-API-Key header is invalid.
+
+    Args:
+        request: Incoming FastAPI request carrying the header and app state.
+
+    Raises:
+        HTTPException: 401 if a key is configured and the incoming header does not match.
+    """
     settings: Settings = request.app.state.settings
     configured = settings.api_key.get_secret_value()
     if not configured:
@@ -34,6 +42,11 @@ async def verify_api_key(request: Request) -> None:
 
 
 def create_app() -> FastAPI:
+    """Build and configure the Retrieval Admin FastAPI application with all routes.
+
+    Returns:
+        Fully configured FastAPI instance ready to serve requests.
+    """
     app = FastAPI(title="Retrieval Admin Service", version="1.0.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -46,10 +59,19 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        """Return a simple liveness check payload."""
         return {"status": "ok"}
 
     @app.post("/retrieve", response_model=RetrieveResponse, dependencies=[Depends(verify_api_key)])
     async def retrieve(body: RetrieveRequest) -> RetrieveResponse:
+        """Embed the query, search Milvus, and return ranked chunks with assembled context.
+
+        Args:
+            body: Retrieval request containing query, top_k, and optional document_type filter.
+
+        Returns:
+            RetrieveResponse with the query, assembled context string, and source references.
+        """
         retriever: Retriever = app.state.retriever
         chunks = await retriever.retrieve(body.query, top_k=body.top_k, document_type=body.document_type)
         console = settings.minio_console_endpoint.rstrip("/")
@@ -71,18 +93,36 @@ def create_app() -> FastAPI:
 
     @app.post("/answer", response_model=AnswerResponse, dependencies=[Depends(verify_api_key)])
     async def answer(body: AnswerRequest) -> AnswerResponse:
+        """Generate an LLM answer grounded in the provided context.
+
+        Args:
+            body: Answer request containing the query and context text.
+
+        Returns:
+            AnswerResponse with the generated answer string.
+        """
         llm: LLMService = app.state.llm
         text = await llm.answer(body.query, body.context)
         return AnswerResponse(answer=text)
 
     @app.get("/status", response_model=StatusResponse, dependencies=[Depends(verify_api_key)])
     async def status() -> StatusResponse:
+        """Return aggregate file processing counts across all pipeline stages.
+
+        Returns:
+            StatusResponse with counts for each processing status.
+        """
         metadata: MetadataService = app.state.metadata
         counts = await metadata.get_status_counts()
         return StatusResponse(**counts)
 
     @app.get("/status/files", response_model=list[FileStatusItem], dependencies=[Depends(verify_api_key)])
     async def status_files() -> list[FileStatusItem]:
+        """Return per-file processing status including raw text availability.
+
+        Returns:
+            List of FileStatusItem records for all tracked files.
+        """
         metadata: MetadataService = app.state.metadata
         rows = await metadata.list_files()
         payload: list[FileStatusItem] = []
@@ -105,17 +145,24 @@ def create_app() -> FastAPI:
 
     @app.get("/status/raw-data", response_model=list[RawDataItem], dependencies=[Depends(verify_api_key)])
     async def status_raw_data() -> list[RawDataItem]:
+        """Return raw ingestion data records for all tracked files.
+
+        Returns:
+            List of RawDataItem records with raw storage and checksum details.
+        """
         metadata: MetadataService = app.state.metadata
         rows = await metadata.list_raw_data()
         return [RawDataItem(**row) for row in rows]
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        """Close async database connections on application shutdown."""
         metadata: MetadataService = app.state.metadata
         await metadata.close()
 
     @app.get("/_conversation-id")
     async def conversation_id() -> dict[str, str]:
+        """Generate and return a new random conversation UUID."""
         return {"conversation_id": str(uuid4())}
 
     return app

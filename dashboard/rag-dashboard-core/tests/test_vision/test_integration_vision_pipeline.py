@@ -37,6 +37,7 @@ pytestmark = pytest.mark.integration
 
 
 def _services_available() -> bool:
+    """Return True if all required Docker services (MinIO, Postgres, Redis, Milvus, VLM) are reachable."""
     import socket
 
     targets = [
@@ -57,6 +58,7 @@ def _services_available() -> bool:
 
 @pytest.fixture(scope="module")
 def integration_settings():
+    """Return live Settings for integration tests; skips if Docker services are unavailable."""
     if not _services_available():
         pytest.skip("Required Docker services are not running on localhost")
 

@@ -4,6 +4,7 @@ import structlog
 
 
 def configure_logging() -> None:
+    """Configure structlog with ISO timestamps, log levels, and console renderer."""
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,

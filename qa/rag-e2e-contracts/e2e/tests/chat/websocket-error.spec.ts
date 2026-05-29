@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies that WebSocket errors surface as visible error text in the assistant bubble. */
 test.describe("websocket error", () => {
   test("shows error text in assistant bubble", async ({ page }) => {
     await page.goto("/");

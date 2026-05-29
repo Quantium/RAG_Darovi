@@ -27,6 +27,11 @@ _VECTOR_NAMES = frozenset(
 
 class ProcessingProbe:
     def __init__(self, settings: Settings) -> None:
+        """Initialize the probe with application settings.
+
+        Args:
+            settings: Application settings providing lock ID and other config.
+        """
         self._settings = settings
 
     def celery_flags(self) -> tuple[bool, bool, dict | None]:
@@ -82,6 +87,16 @@ class ProcessingProbe:
             return False
 
     async def advisory_extract_lock_held(self, session: AsyncSession) -> bool:
+        """Check whether the extract_text advisory lock is currently held in PostgreSQL.
+
+        Returns False for non-PostgreSQL backends (e.g., SQLite in tests).
+
+        Args:
+            session: Active SQLAlchemy async session.
+
+        Returns:
+            True if the lock is held by another session, False otherwise.
+        """
         try:
             lock_id = int(self._settings.extract_text_lock_id)
             result = await session.execute(

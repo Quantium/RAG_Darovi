@@ -8,6 +8,7 @@ from src.converter.docx_converter import DocxConverter
 class TestDocxConverter:
     @patch("src.converter.docx_converter.docx.Document")
     def test_convert_docx(self, mock_doc_cls):
+        """Verify DOCX conversion includes paragraph text in the output."""
         mock_doc = MagicMock()
         mock_para = MagicMock(text="Hello", style=MagicMock(name="Normal"))
         mock_doc.paragraphs = [mock_para]
@@ -22,6 +23,7 @@ class TestDocxConverter:
 
     @patch("src.converter.docx_converter.docx.Document")
     def test_convert_docx_with_headings(self, mock_doc_cls):
+        """Verify 'Heading 1' style paragraphs are converted to '# Title' Markdown headings."""
         mock_doc = MagicMock()
         mock_style = MagicMock()
         mock_style.name = "Heading 1"

@@ -26,9 +26,22 @@ class SourceAdapter(Protocol):
 
 class LocalSourceAdapter:
     def __init__(self, settings: Settings) -> None:
+        """Initialize the adapter with the local source folder path from settings.
+
+        Args:
+            settings: Application settings providing the local_source_folder path.
+        """
         self._root = Path(settings.local_source_folder)
 
     def iter_pages(self, page_size: int) -> Iterator[list[SourceFile]]:
+        """Yield pages of SourceFile descriptors discovered recursively under the root folder.
+
+        Args:
+            page_size: Maximum number of files per yielded page.
+
+        Yields:
+            Lists of SourceFile instances, each page containing at most page_size files.
+        """
         if not self._root.exists():
             return
         all_files: list[SourceFile] = []
@@ -54,6 +67,19 @@ class LocalSourceAdapter:
                 yield page
 
     def download_file(self, source_file: SourceFile) -> bytes:
+        """Read the raw bytes of a source file from the local filesystem.
+
+        Uses path_hint for a fast direct lookup, then falls back to a full tree search by file ID.
+
+        Args:
+            source_file: SourceFile descriptor whose path_hint or file_id is used to locate the file.
+
+        Returns:
+            Raw file content as bytes.
+
+        Raises:
+            FileNotFoundError: If the file cannot be located under the root folder.
+        """
         if source_file.path_hint:
             candidate = self._root / source_file.path_hint
             if candidate.exists():
@@ -68,4 +94,12 @@ class LocalSourceAdapter:
 
 
 def build_source_adapter(settings: Settings) -> SourceAdapter:
+    """Construct the appropriate SourceAdapter based on the configured ingest source.
+
+    Args:
+        settings: Application settings providing the ingest_source and related config.
+
+    Returns:
+        A SourceAdapter instance ready to list and download source files.
+    """
     return LocalSourceAdapter(settings)

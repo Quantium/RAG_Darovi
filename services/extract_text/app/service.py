@@ -19,11 +19,26 @@ class ExtractTextService:
         repo: MetadataRepository,
         storage: MinIOStorage,
     ) -> None:
+        """Initialize the extraction service with its dependencies.
+
+        Args:
+            settings: Application settings controlling batch size and lock ID.
+            repo: Metadata repository for reading candidates and updating statuses.
+            storage: MinIO storage client for downloading raw files and uploading texts.
+        """
         self._settings = settings
         self._repo = repo
         self._storage = storage
 
     def run_once(self) -> dict[str, int]:
+        """Process one batch of raw files needing text extraction.
+
+        Acquires an advisory lock to prevent concurrent runs, extracts text from each
+        candidate, uploads the result to MinIO, and updates the file record status.
+
+        Returns:
+            Dict with 'scanned', 'updated', and 'failed' counts for the batch.
+        """
         if not self._repo.try_acquire_lock(self._settings.extract_text_lock_id):
             logger.info("extract_text.skipped", reason="another extraction run is active")
             return {"scanned": 0, "updated": 0, "failed": 0}

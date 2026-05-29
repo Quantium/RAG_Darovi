@@ -22,6 +22,7 @@ def _openai_response(vectors: list[list[float]]) -> MagicMock:
 
 @pytest.fixture
 def mock_httpx_client() -> AsyncMock:
+    """Return a mock httpx.AsyncClient pre-configured with a single 768-dim embedding response."""
     client = AsyncMock()
     client.post.return_value = _openai_response([[0.1] * 768])
     return client
@@ -29,18 +30,21 @@ def mock_httpx_client() -> AsyncMock:
 
 class TestBatchEmbedder:
     async def test_embed_single_text(self, settings, mock_httpx_client):
+        """Verify embed_texts returns one 768-dim vector for a single input text."""
         embedder = BatchEmbedder(settings, client=mock_httpx_client)
         vectors = await embedder.embed_texts(["Hello world"])
         assert len(vectors) == 1
         assert len(vectors[0]) == 768
 
     async def test_embed_batch(self, settings, mock_httpx_client):
+        """Verify embed_texts returns one vector per input text for a batch of 5."""
         mock_httpx_client.post.return_value = _openai_response([[0.1] * 768 for _ in range(5)])
         embedder = BatchEmbedder(settings, client=mock_httpx_client)
         vectors = await embedder.embed_texts([f"text {i}" for i in range(5)])
         assert len(vectors) == 5
 
     async def test_batch_size_respected(self, settings, mock_httpx_client):
+        """Verify that 5 texts with batch_size=2 triggers ceil(5/2)=3 API calls."""
         settings_small = settings.model_copy(update={"embed_batch_size": 2})
         mock_httpx_client.post.return_value = _openai_response([[0.1] * 768, [0.2] * 768])
         embedder = BatchEmbedder(settings_small, client=mock_httpx_client)
@@ -48,11 +52,13 @@ class TestBatchEmbedder:
         assert mock_httpx_client.post.call_count == 3  # ceil(5/2)
 
     async def test_handles_empty_text(self, settings, mock_httpx_client):
+        """Verify empty string input produces a zero vector without calling the API."""
         embedder = BatchEmbedder(settings, client=mock_httpx_client)
         vectors = await embedder.embed_texts([""])
         assert len(vectors[0]) == 768 or vectors[0] == [0.0] * 768
 
     async def test_retries_on_connect_error(self, settings, mock_httpx_client):
+        """Verify that a transient ConnectError is retried and succeeds on the second attempt."""
         mock_httpx_client.post.side_effect = [
             httpx.ConnectError("Connection refused"),
             _openai_response([[0.1] * 768]),

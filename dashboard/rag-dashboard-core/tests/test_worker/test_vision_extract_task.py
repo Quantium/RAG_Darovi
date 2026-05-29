@@ -26,6 +26,7 @@ class TestVisionExtractTask:
     @patch("src.worker.tasks.build_storage")
     @patch("src.worker.tasks.build_settings")
     def test_noop_when_no_sentinels(self, mock_settings, mock_storage_builder, mock_repo_builder):
+        """Verify vision_extract skips upload and upsert when the text file has no sentinels."""
         mock_settings.return_value = MagicMock()
         mock_storage = MagicMock()
         mock_storage.download.return_value = b"plain text without sentinels"
@@ -49,6 +50,7 @@ class TestVisionExtractTask:
         mock_repo_builder,
         mock_redis_cls,
     ):
+        """Verify vision_extract replaces the VLM sentinel with transcribed text and upserts KV to Postgres."""
         from config.settings import Settings
         from pydantic import SecretStr
 
@@ -125,6 +127,7 @@ class TestVisionExtractTask:
         mock_repo_builder,
         mock_redis_cls,
     ):
+        """Verify vision_extract falls back to Tesseract OCR when the circuit breaker is open."""
         from config.settings import Settings
         from pydantic import SecretStr
 

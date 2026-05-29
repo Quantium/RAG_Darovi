@@ -10,12 +10,14 @@ CHATBOT_RESPONSE_BASE_URL = os.getenv("CHATBOT_RESPONSE_BASE_URL", "http://local
 
 
 def test_retrieval_admin_health() -> None:
+    """Contract test: verify the retrieval-admin service /health endpoint returns status 'ok'."""
     response = httpx.get(f"{RETRIEVAL_ADMIN_BASE_URL}/health", timeout=10.0)
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
 def test_chatbot_response_health() -> None:
+    """Contract test: verify the chatbot-response service /health endpoint returns status 'ok'."""
     response = httpx.get(f"{CHATBOT_RESPONSE_BASE_URL}/health", timeout=10.0)
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

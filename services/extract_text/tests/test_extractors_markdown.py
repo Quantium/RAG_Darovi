@@ -17,6 +17,7 @@ from app.extractors import IMAGE_SENTINEL, extract_text
 
 
 def test_extract_text_keeps_markdown_content():
+    """Verify that Markdown files pass through extraction with headings, quotes, and lists intact."""
     raw_markdown = b"# Title\n\n> Quoted line\n\n- item"
 
     extracted = extract_text(raw_markdown, "text/markdown", "sample.md")
@@ -27,6 +28,7 @@ def test_extract_text_keeps_markdown_content():
 
 
 def test_extract_text_converts_html_to_markdown_table_and_quote():
+    """Verify that HTML extraction converts headings, blockquotes, and tables to Markdown."""
     raw_html = (
         b"<h1>Report</h1>"
         b"<blockquote>Important note</blockquote>"
@@ -42,6 +44,7 @@ def test_extract_text_converts_html_to_markdown_table_and_quote():
 
 
 def test_extract_text_converts_xlsx_to_markdown_table():
+    """Verify that XLSX extraction renders each sheet as a named Markdown table section."""
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.title = "Summary"
@@ -64,6 +67,7 @@ def test_extract_text_converts_xlsx_to_markdown_table():
 
 
 def test_extract_text_converts_docx_to_markdown_headings_and_paragraphs():
+    """Verify that DOCX extraction converts headings to Markdown and preserves paragraph text."""
     document = Document()
     document.add_heading("Document title", level=1)
     document.add_paragraph("First paragraph.")
@@ -85,6 +89,7 @@ def test_extract_text_converts_docx_to_markdown_headings_and_paragraphs():
 
 
 def test_extract_text_keeps_image_sentinel():
+    """Verify that image MIME types produce a single IMAGE_SENTINEL rather than extracted text."""
     extracted = extract_text(b"binary", "image/png", "img.png")
 
     assert extracted == IMAGE_SENTINEL

@@ -18,6 +18,12 @@ FORBIDDEN_SQL_PATTERNS = re.compile(
 
 class SQLGenerator:
     def __init__(self, retriever: Retriever, llm: LLMClient) -> None:
+        """Initialize the generator with a retriever and LLM client.
+
+        Args:
+            retriever: Retriever used to fetch relevant document chunks.
+            llm: LLM client for generating SQL schema and INSERT statements.
+        """
         self._retriever = retriever
         self._llm = llm
 

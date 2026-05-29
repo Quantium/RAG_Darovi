@@ -15,8 +15,24 @@ VISION_SENTINEL_RE = re.compile(r"\u0000VISION_NEEDED:(\d+)\u0000")
 
 
 def has_sentinels(text: str) -> bool:
+    """Return True if the text contains at least one VISION_NEEDED sentinel.
+
+    Args:
+        text: Extracted text that may contain sentinel markers.
+
+    Returns:
+        True if any sentinel is present, False otherwise.
+    """
     return bool(VISION_SENTINEL_RE.search(text))
 
 
 def find_pages(text: str) -> list[int]:
+    """Extract all page numbers referenced by VISION_NEEDED sentinels in the text.
+
+    Args:
+        text: Extracted text containing zero or more sentinel markers.
+
+    Returns:
+        Sorted list of page numbers (integers) found in the sentinels.
+    """
     return [int(m.group(1)) for m in VISION_SENTINEL_RE.finditer(text)]

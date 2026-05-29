@@ -23,6 +23,11 @@ class FileStatusRow:
 
 class MetadataService:
     def __init__(self, settings: Settings) -> None:
+        """Initialize async database engine, session factory, and MinIO client.
+
+        Args:
+            settings: Application settings providing database URL, MinIO credentials, and bucket name.
+        """
         self._engine = create_async_engine(settings.database_url.get_secret_value())
         self._session_factory = async_sessionmaker(self._engine, class_=AsyncSession, expire_on_commit=False)
         self._minio = Minio(
@@ -34,9 +39,15 @@ class MetadataService:
         self._text_bucket = settings.minio_bucket_text
 
     async def close(self) -> None:
+        """Dispose of the async database engine and release connection pool resources."""
         await self._engine.dispose()
 
     async def get_status_counts(self) -> dict[str, int]:
+        """Query aggregate file counts grouped by pipeline status.
+
+        Returns:
+            Dict mapping each status name (e.g. 'embedded', 'failed') to its file count.
+        """
         query = text(
             """
             SELECT
@@ -69,6 +80,11 @@ class MetadataService:
             return {key: int(row[key] or 0) for key in row.keys()}
 
     async def list_files(self) -> list[FileStatusRow]:
+        """Fetch all file records with their processing status and MinIO text key.
+
+        Returns:
+            List of FileStatusRow instances ordered by drive_file_id.
+        """
         query = text(
             """
             SELECT
@@ -89,6 +105,14 @@ class MetadataService:
         return [FileStatusRow(**row) for row in rows]
 
     async def list_raw_data(self, max_chars: int = 6000) -> list[dict[str, str | None]]:
+        """Fetch file records with their extracted text preview from MinIO.
+
+        Args:
+            max_chars: Maximum number of characters to return per extracted text field.
+
+        Returns:
+            List of dicts with file metadata and truncated extracted_text (None if unavailable).
+        """
         files = await self.list_files()
         result: list[dict[str, str | None]] = []
         for file_row in files:
@@ -117,6 +141,15 @@ class MetadataService:
         return result
 
     def raw_text_available(self, key: str | None) -> tuple[bool, str | None]:
+        """Check whether the extracted text object exists in MinIO.
+
+        Args:
+            key: MinIO object key to stat, or None if no key has been recorded.
+
+        Returns:
+            Tuple of (available, reason). If available is True, reason is None.
+            If False, reason is a human-readable explanation.
+        """
         if not key:
             return False, "No extracted text key recorded."
         try:

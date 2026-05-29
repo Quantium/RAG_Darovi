@@ -45,9 +45,22 @@ class FileRecord:
 
 class MetadataRepository:
     def __init__(self, engine: Engine) -> None:
+        """Initialize the repository with a SQLAlchemy engine.
+
+        Args:
+            engine: Connected SQLAlchemy engine bound to the project database.
+        """
         self._engine = engine
 
     def get_file(self, drive_file_id: str) -> FileRecord | None:
+        """Fetch a single file record by its source identifier.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+
+        Returns:
+            FileRecord if found, or None if no matching row exists.
+        """
         with self._engine.begin() as conn:
             row = conn.execute(
                 text(
@@ -71,6 +84,14 @@ class MetadataRepository:
         return _map_row(row)
 
     def upsert_file(self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None) -> None:
+        """Insert a new file record or update its name, MIME type, and modification time on conflict.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            name: Display file name.
+            mime_type: MIME type string of the file.
+            drive_modified_at: Last-modified timestamp from the source, or None if unavailable.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -119,6 +140,16 @@ class MetadataRepository:
         raw_source_version: str,
         raw_checksum: str,
     ) -> None:
+        """Record a successful raw upload and advance the file to 'synced' status.
+
+        Resets text_status to 'pending' so the extract_text service will re-process the file.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_raw_key: MinIO object key where the raw file was stored.
+            raw_source_version: Source version string (e.g. ISO-8601 modified-at timestamp).
+            raw_checksum: SHA-256 hex digest of the uploaded file content.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -146,6 +177,11 @@ class MetadataRepository:
             )
 
     def list_all(self) -> Sequence[FileRecord]:
+        """Fetch all file records from the database.
+
+        Returns:
+            Sequence of all FileRecord instances, unfiltered.
+        """
         with self._engine.begin() as conn:
             rows = conn.execute(
                 text(
@@ -166,12 +202,31 @@ class MetadataRepository:
 
 
 def create_repository(settings: Settings) -> MetadataRepository:
+    """Create a MetadataRepository after validating the database schema.
+
+    Args:
+        settings: Application settings providing the database connection URL.
+
+    Returns:
+        Ready-to-use MetadataRepository instance.
+
+    Raises:
+        RuntimeError: If required tables or columns are missing from the database schema.
+    """
     engine = create_engine(settings.database_url_sync.get_secret_value())
     _assert_schema_compatible(engine)
     return MetadataRepository(engine)
 
 
 def _map_row(row: RowMapping) -> FileRecord:
+    """Map a raw database row to a FileRecord dataclass.
+
+    Args:
+        row: SQLAlchemy RowMapping from a file_records query.
+
+    Returns:
+        FileRecord populated with the row's field values.
+    """
     return FileRecord(
         drive_file_id=row["drive_file_id"],
         name=row["name"],

@@ -10,10 +10,23 @@ from src.metadata.repository import SyncMetadataRepository
 
 
 def build_settings() -> Settings:
+    """Instantiate and return a fresh Settings object from environment variables.
+
+    Returns:
+        Populated Settings instance.
+    """
     return Settings()
 
 
 def build_storage(settings: Settings | None = None) -> MinIOStorage:
+    """Build and return a MinIOStorage with buckets ensured to exist.
+
+    Args:
+        settings: Optional settings; defaults to a fresh Settings() if not provided.
+
+    Returns:
+        Ready-to-use MinIOStorage instance.
+    """
     s = settings or build_settings()
     storage = MinIOStorage(s)
     storage.ensure_buckets()
@@ -32,6 +45,7 @@ def build_metadata_repo(settings: Settings | None = None) -> tuple[SyncMetadataR
     repo = SyncMetadataRepository(session)
 
     def cleanup() -> None:
+        """Close the database session and dispose of the engine connection pool."""
         session.close()
         engine.dispose()
 
@@ -66,4 +80,12 @@ MIME_TO_DOC_TYPE: dict[str, str] = {
 
 
 def derive_document_type(mime_type: str) -> str:
+    """Map a MIME type string to a document type identifier used by the vector store.
+
+    Args:
+        mime_type: MIME type string to classify.
+
+    Returns:
+        Document type string (e.g. 'pdf', 'doc', 'sheet'); defaults to 'doc' for unknown types.
+    """
     return MIME_TO_DOC_TYPE.get(mime_type, "doc")

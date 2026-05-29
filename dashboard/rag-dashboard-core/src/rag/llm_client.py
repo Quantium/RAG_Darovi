@@ -32,6 +32,16 @@ class OpenAICompatibleLLMClient:
     """LLM client for any OpenAI-compatible API (Ollama, Gemini, DeepSeek)."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the client from a Settings object or explicit base_url/api_key/model args.
+
+        Args:
+            *args: Either (Settings,) or (base_url, api_key, model) positional args.
+            **kwargs: Keyword alternatives: base_url, api_key, model.
+
+        Raises:
+            ValueError: If Settings contains an unrecognized llm_provider.
+            TypeError: If base_url, api_key, or model cannot be resolved from the arguments.
+        """
         resolved_base: str | None = None
         resolved_key: str | None = None
         resolved_model: str | None = None
@@ -72,6 +82,19 @@ class OpenAICompatibleLLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> str:
+        """Send a chat completion request and return the full response text.
+
+        Args:
+            messages: OpenAI-format message list with 'role' and 'content' keys.
+            max_tokens: Maximum tokens to generate in the response.
+            temperature: Sampling temperature for response generation.
+
+        Returns:
+            Generated response text, or an empty string if content is None.
+
+        Raises:
+            ConnectionError: If the circuit breaker is open due to recent failures.
+        """
         self._check_circuit()
         try:
             response = await self._client.chat.completions.create(
@@ -93,6 +116,19 @@ class OpenAICompatibleLLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.3,
     ) -> AsyncIterator[str]:
+        """Stream a chat completion response, yielding non-empty delta tokens as they arrive.
+
+        Args:
+            messages: OpenAI-format message list with 'role' and 'content' keys.
+            max_tokens: Maximum tokens to generate in the response.
+            temperature: Sampling temperature for response generation.
+
+        Yields:
+            Non-empty string delta tokens from the streaming response.
+
+        Raises:
+            ConnectionError: If the circuit breaker is open due to recent failures.
+        """
         self._check_circuit()
         try:
             stream = await self._client.chat.completions.create(
@@ -115,11 +151,17 @@ class OpenAICompatibleLLMClient:
             raise
 
     def _check_circuit(self) -> None:
+        """Raise ConnectionError if the circuit breaker is currently open.
+
+        Raises:
+            ConnectionError: If ≥3 consecutive failures have occurred within the cooldown window.
+        """
         if self._consecutive_failures >= 3 and time.time() < self._circuit_open_until:
             wait_time = self._circuit_open_until - time.time()
             raise ConnectionError(f"Circuit breaker open. Retry after {wait_time:.0f}s")
 
     def _record_failure(self) -> None:
+        """Increment the failure counter and open the circuit breaker after 3 consecutive failures."""
         self._consecutive_failures += 1
         if self._consecutive_failures >= 3:
             self._circuit_open_until = time.time() + 60.0

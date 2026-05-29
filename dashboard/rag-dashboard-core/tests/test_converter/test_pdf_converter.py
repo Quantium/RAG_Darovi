@@ -21,6 +21,7 @@ def _settings_with_vision(enabled: bool = True) -> Settings:
 
 class TestPdfConverter:
     def test_extract_text_from_pdf(self, sample_pdf_bytes):
+        """Verify good-quality PDF pages produce extracted text in the output."""
         converter = PdfConverter()
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_page = MagicMock()
@@ -34,6 +35,7 @@ class TestPdfConverter:
             assert "Hello World" in text
 
     def test_low_quality_page_emits_vision_sentinel_when_enabled(self, sample_pdf_bytes):
+        """Verify a low-quality page is replaced with a VISION_NEEDED sentinel when vision is enabled."""
         converter = PdfConverter(_settings_with_vision(True))
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_page = MagicMock()
@@ -46,6 +48,7 @@ class TestPdfConverter:
             assert VISION_SENTINEL_TEMPLATE.format(page=1) in text
 
     def test_low_quality_page_falls_back_to_tesseract_when_vision_disabled(self, sample_pdf_bytes):
+        """Verify a low-quality page triggers Tesseract OCR and not a sentinel when vision is disabled."""
         converter = PdfConverter(_settings_with_vision(False))
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open, patch(
             "src.converter.pdf_converter.convert_from_bytes", return_value=[MagicMock()]
@@ -61,6 +64,7 @@ class TestPdfConverter:
             assert VISION_SENTINEL_TEMPLATE.format(page=1) not in text
 
     def test_does_not_mark_good_quality_pages(self, sample_pdf_bytes):
+        """Verify good-quality pages are not replaced with sentinels even when vision is enabled."""
         converter = PdfConverter(_settings_with_vision(True))
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_page = MagicMock()
@@ -76,6 +80,7 @@ class TestPdfConverter:
             assert VISION_SENTINEL_TEMPLATE.format(page=1) not in text
 
     def test_low_quality_with_tables_still_marks_for_vision(self, sample_pdf_bytes):
+        """Verify low-quality pages are still vision-marked even when tables are also extracted."""
         converter = PdfConverter(_settings_with_vision(True))
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_page = MagicMock()
@@ -89,6 +94,7 @@ class TestPdfConverter:
             assert "Col1" in text
 
     def test_preserves_page_boundaries(self, sample_pdf_bytes):
+        """Verify the output contains '--- PAGE N ---' markers for multi-page PDFs."""
         converter = PdfConverter()
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             pages = [
@@ -100,6 +106,7 @@ class TestPdfConverter:
             assert "PAGE" in text
 
     def test_handles_empty_pdf(self):
+        """Verify converting an empty byte string returns an empty string without error."""
         converter = PdfConverter()
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_open.return_value.__enter__.return_value.pages = []
@@ -107,6 +114,7 @@ class TestPdfConverter:
             assert text == ""
 
     def test_detects_tables(self, sample_pdf_bytes):
+        """Verify table cells extracted by pdfplumber appear in the converter output."""
         converter = PdfConverter()
         with patch("src.converter.pdf_converter.pdfplumber.open") as mock_open:
             mock_page = MagicMock()

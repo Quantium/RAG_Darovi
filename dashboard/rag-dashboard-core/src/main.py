@@ -8,6 +8,7 @@ from src.logging import configure_logging
 
 
 def main() -> None:
+    """Parse CLI arguments and dispatch to the appropriate subcommand (serve, worker, beat, ingest, query)."""
     configure_logging()
     parser = argparse.ArgumentParser(description="RAG Darovi Pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -65,6 +66,13 @@ def main() -> None:
 
 
 async def _cli_query(settings: Settings, query: str, doc_type: str | None) -> None:
+    """Run a retrieval-augmented query from the CLI and print the answer with sources.
+
+    Args:
+        settings: Application settings used to build embedder, vector store, and LLM.
+        query: Natural-language question to answer.
+        doc_type: Optional document type filter (e.g. 'pdf', 'doc', 'sheet').
+    """
     from src.vectorizer.embedder import BatchEmbedder
     from src.vectorizer.milvus_store import MilvusStore
     from src.rag.retriever import Retriever

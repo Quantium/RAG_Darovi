@@ -54,6 +54,13 @@ const rawDataTable = document.getElementById("raw-data-table");
 document.body.setAttribute("data-theme", state.theme);
 themeToggle.textContent = state.theme === "light" ? "🌙" : "☀️";
 
+/**
+ * Build common HTTP request headers for API calls.
+ *
+ * @param {boolean} [jsonBody=false] - Include Content-Type: application/json.
+ * @param {boolean} [dashboardConfirm=false] - Include X-Dashboard-Confirm: yes for destructive actions.
+ * @returns {Object} Headers object ready for use with fetch().
+ */
 function apiHeaders(jsonBody = false, dashboardConfirm = false) {
     const h = {};
     if (jsonBody) h["Content-Type"] = "application/json";
@@ -64,6 +71,12 @@ function apiHeaders(jsonBody = false, dashboardConfirm = false) {
 
 let statusPollStarted = false;
 
+/**
+ * Escape special HTML characters to prevent XSS injection.
+ *
+ * @param {*} text - Value to escape; null/undefined are coerced to empty string.
+ * @returns {string} HTML-safe string.
+ */
 function escapeHtml(text) {
     return String(text ?? "")
         .replace(/&/g, "&amp;")
@@ -72,6 +85,13 @@ function escapeHtml(text) {
         .replace(/"/g, "&quot;");
 }
 
+/**
+ * Locale-insensitive case-insensitive string comparator for sorting.
+ *
+ * @param {*} a - First value to compare.
+ * @param {*} b - Second value to compare.
+ * @returns {number} -1, 0, or 1 suitable for Array.prototype.sort().
+ */
 function compareStrings(a, b) {
     const sa = String(a ?? "").toLowerCase();
     const sb = String(b ?? "").toLowerCase();
@@ -80,6 +100,13 @@ function compareStrings(a, b) {
     return 0;
 }
 
+/**
+ * Numeric comparator that sorts non-finite values (null, undefined, NaN) to the end.
+ *
+ * @param {*} a - First value to compare.
+ * @param {*} b - Second value to compare.
+ * @returns {number} -1, 0, or 1 suitable for Array.prototype.sort().
+ */
 function compareNullableNumber(a, b) {
     const na = Number(a);
     const nb = Number(b);
@@ -93,12 +120,28 @@ function compareNullableNumber(a, b) {
     return 0;
 }
 
+/**
+ * Return a sorted copy of an item array using a key-based comparator registry.
+ *
+ * @param {Array} items - Array of objects to sort.
+ * @param {{key: string, direction: 'asc'|'desc'}|null} sort - Active sort state, or null for no sort.
+ * @param {Object.<string, function>} getters - Map of sort key → comparator function(a, b).
+ * @returns {Array} New sorted array (original is not mutated).
+ */
 function sortRows(items, sort, getters) {
     if (!sort || !getters[sort.key]) return items;
     const mult = sort.direction === "desc" ? -1 : 1;
     return [...items].sort((a, b) => mult * getters[sort.key](a, b));
 }
 
+/**
+ * Slice an array to a single page and compute pagination metadata.
+ *
+ * @param {Array} items - Full sorted dataset.
+ * @param {number|'all'} pageSize - Rows per page, or 'all' to return all rows.
+ * @param {number} page - Requested 1-based page number.
+ * @returns {{rows: Array, page: number, totalPages: number, totalItems: number, start: number, end: number}}
+ */
 function paginateSlice(items, pageSize, page) {
     const totalItems = items.length;
     if (pageSize === "all" || totalItems === 0) {
@@ -126,6 +169,15 @@ function paginateSlice(items, pageSize, page) {
     };
 }
 
+/**
+ * Update pagination info text and Prev/Next button disabled states.
+ *
+ * @param {{totalItems: number, page: number, totalPages: number, start: number, end: number}} meta
+ *   Pagination metadata from paginateSlice().
+ * @param {HTMLElement|null} infoEl - Element displaying the "Showing X–Y of Z" text.
+ * @param {HTMLButtonElement|null} prevBtn - Previous page button.
+ * @param {HTMLButtonElement|null} nextBtn - Next page button.
+ */
 function updatePaginationUI(meta, infoEl, prevBtn, nextBtn) {
     if (!infoEl) return;
     if (meta.totalItems === 0) {
@@ -137,6 +189,12 @@ function updatePaginationUI(meta, infoEl, prevBtn, nextBtn) {
     if (nextBtn) nextBtn.disabled = meta.page >= meta.totalPages || meta.totalPages <= 1;
 }
 
+/**
+ * Update sort indicator CSS classes and aria-sort attributes in a table header.
+ *
+ * @param {HTMLElement|null} tableEl - The table element whose .sortable-th headers are updated.
+ * @param {{key: string, direction: 'asc'|'desc'}|null} sort - Current sort state, or null for no sort.
+ */
 function updateSortHeaderUI(tableEl, sort) {
     if (!tableEl) return;
     tableEl.querySelectorAll(".sortable-th").forEach((th) => {
@@ -151,6 +209,13 @@ function updateSortHeaderUI(tableEl, sort) {
     });
 }
 
+/**
+ * Compute the next sort state after a header click, toggling direction on the same key.
+ *
+ * @param {{key: string, direction: 'asc'|'desc'}|null} currentSort - Current sort state.
+ * @param {string} sortKey - Column key that was clicked.
+ * @returns {{key: string, direction: 'asc'|'desc'}} New sort state.
+ */
 function handleSortClick(currentSort, sortKey) {
     if (currentSort?.key === sortKey) {
         return {
@@ -161,6 +226,12 @@ function handleSortClick(currentSort, sortKey) {
     return { key: sortKey, direction: "asc" };
 }
 
+/**
+ * Build the URL for opening a raw file via the dashboard API.
+ *
+ * @param {string} driveFileId - Unique identifier of the file record.
+ * @returns {string} Relative URL with optional api_key query parameter.
+ */
 function fileOpenUrl(driveFileId) {
     const encodedId = encodeURIComponent(String(driveFileId || ""));
     const params = new URLSearchParams();
@@ -171,6 +242,12 @@ function fileOpenUrl(driveFileId) {
     return `/files/${encodedId}/open${qs ? `?${qs}` : ""}`;
 }
 
+/**
+ * Map a pipeline status string to a simplified extraction status label.
+ *
+ * @param {string} pipelineStatus - File record status value (e.g. 'embedded', 'failed').
+ * @returns {'completed'|'failed'|'pending'} Simplified extraction status.
+ */
 function extractionStatusForPipelineStatus(pipelineStatus) {
     if (pipelineStatus === "embedded" || pipelineStatus === "converted") return "completed";
     if (pipelineStatus === "failed") return "failed";
@@ -212,6 +289,11 @@ const rawDataSortGetters = {
     },
 };
 
+/**
+ * Render a page of file status rows into the document status table body.
+ *
+ * @param {Array<Object>} files - Array of file status objects from the /status/files endpoint.
+ */
 function renderDocumentStatusRows(files) {
     if (!documentStatusTableBody) return;
     documentStatusTableBody.innerHTML = "";
@@ -241,6 +323,12 @@ function renderDocumentStatusRows(files) {
     });
 }
 
+/**
+ * Return a human-readable label for the file currently in the ingestion pipeline.
+ *
+ * @param {Array<Object>} files - Document status file objects.
+ * @returns {string} Label string for the currently processing file, or a waiting message.
+ */
 function ingestingFileLabel(files) {
     const inProgress = files.find((file) => ["pending", "downloaded", "converted"].includes(file.status || ""));
     if (!inProgress) return "Waiting for pipeline updates...";
@@ -249,6 +337,10 @@ function ingestingFileLabel(files) {
     return `Current file: ${name} (${status})`;
 }
 
+/**
+ * Poll the pipeline status and update the ingest status bar.
+ * Clears the poll timer when all files have finished processing.
+ */
 async function refreshIngestStatus() {
     try {
         const statusRes = await fetch("/status", { headers: apiHeaders() });
@@ -295,6 +387,10 @@ async function refreshIngestStatus() {
     }
 }
 
+/**
+ * Prompt for confirmation, then POST /ingest to queue an incremental sync job,
+ * and start polling ingest status every 2.5 s.
+ */
 async function triggerIngest() {
     const confirmed = window.confirm(
         "Esta acción iniciará una nueva ingesta y los cambios anteriores se perderán. ¿Deseas continuar?"
@@ -323,6 +419,10 @@ async function triggerIngest() {
     await refreshIngestStatus();
 }
 
+/**
+ * Prompt for confirmation, then POST /ingest/restart to clear artifacts and queue a full re-ingestion,
+ * and start polling ingest status every 2.5 s.
+ */
 async function triggerRestartIngest() {
     const confirmed = window.confirm(
         "Esta acción reiniciará la ingesta: intentará limpiar MinIO/Milvus/metadata y luego lanzará una nueva ingesta. ¿Deseas continuar?"
@@ -351,6 +451,11 @@ async function triggerRestartIngest() {
     await refreshIngestStatus();
 }
 
+/**
+ * Return the current file status list filtered by the active filter button selection.
+ *
+ * @returns {Array<Object>} Filtered subset of state.documentStatusFiles.
+ */
 function filteredDocumentStatusFiles() {
     if (state.documentStatusFilter === "raw-text-missing") {
         return state.documentStatusFiles.filter((file) => file.raw_text_available !== true);
@@ -358,6 +463,10 @@ function filteredDocumentStatusFiles() {
     return state.documentStatusFiles;
 }
 
+/**
+ * Re-render the document status table with current filter, sort, and pagination state.
+ * Updates the sort header UI and pagination controls without fetching new data.
+ */
 function refreshDocumentStatusTable() {
     const filtered = filteredDocumentStatusFiles();
     const sorted = sortRows(filtered, state.documentStatusSort, documentStatusSortGetters);
@@ -369,6 +478,10 @@ function refreshDocumentStatusTable() {
     renderDocumentStatusRows(meta.rows);
 }
 
+/**
+ * Fetch document status files from the API and refresh the table.
+ * Resets the page to 1 and shows an error row on fetch failure.
+ */
 async function loadDocumentStatus() {
     if (!documentStatusTableBody || !documentStatusEmpty) return;
     state.documentStatusPage = 1;
@@ -394,6 +507,12 @@ async function loadDocumentStatus() {
     }
 }
 
+/**
+ * Render a page of raw data rows into the raw data table body.
+ * Long extracted text is collapsed behind a "Show more" toggle button.
+ *
+ * @param {Array<Object>} items - Raw data objects from the /status/raw-data endpoint.
+ */
 function renderRawDataRows(items) {
     if (!rawDataTableBody) return;
     rawDataTableBody.innerHTML = "";
@@ -426,6 +545,9 @@ function renderRawDataRows(items) {
     });
 }
 
+/**
+ * Re-render the raw data table with current sort and pagination state without fetching new data.
+ */
 function refreshRawDataTable() {
     const sorted = sortRows(state.rawDataItems, state.rawDataSort, rawDataSortGetters);
     const meta = paginateSlice(sorted, state.rawDataPageSize, state.rawDataPage);
@@ -436,6 +558,10 @@ function refreshRawDataTable() {
     renderRawDataRows(meta.rows);
 }
 
+/**
+ * Fetch raw data items from the API and refresh the table.
+ * Resets the page to 1 and shows an error row on fetch failure.
+ */
 async function loadRawData() {
     if (!rawDataTableBody || !rawDataEmpty) return;
     state.rawDataPage = 1;
@@ -461,15 +587,36 @@ async function loadRawData() {
     }
 }
 
+/**
+ * Generate an HTML string for a single dashboard metric tile.
+ *
+ * @param {string} label - Human-readable label for the metric.
+ * @param {string|number} value - Metric value to display.
+ * @returns {string} HTML string for the metric row element.
+ */
 function metricRow(label, value) {
     return `<div class="dash-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
 }
 
+/**
+ * Build a MinIO web console URL for a given bucket and object key.
+ *
+ * @param {string} bucket - MinIO bucket name.
+ * @param {string|null|undefined} key - Object key within the bucket.
+ * @returns {string|null} Full MinIO console URL, or null if key is falsy.
+ */
 function minioConsoleUrl(bucket, key) {
     if (!key) return null;
     return `http://${window.location.hostname}:9001/browser/${encodeURIComponent(bucket)}/${encodeURIComponent(key)}`;
 }
 
+/**
+ * Generate an HTML string for the currently in-flight file row in a dashboard card.
+ *
+ * @param {{name: string, minio_bucket: string, minio_key: string}|null} file
+ *   In-flight file descriptor, or null/undefined if no file is in-flight.
+ * @returns {string} HTML string with a MinIO link, or empty string if file is absent.
+ */
 function inflightFileRow(file) {
     if (!file || !file.name) return "";
     const url = minioConsoleUrl(file.minio_bucket, file.minio_key);
@@ -479,6 +626,12 @@ function inflightFileRow(file) {
     return `<div class="dash-inflight-file">${nameHtml}</div>`;
 }
 
+/**
+ * Format a millisecond duration as HH:MM:SS.
+ *
+ * @param {number} ms - Elapsed milliseconds.
+ * @returns {string} Zero-padded time string in HH:MM:SS format.
+ */
 function formatElapsed(ms) {
     const s = Math.floor(ms / 1000);
     const h = Math.floor(s / 3600);
@@ -487,6 +640,12 @@ function formatElapsed(ms) {
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+/**
+ * Update the text and data-paused attribute of a pause/resume toggle button.
+ *
+ * @param {string} btnId - ID of the button element to update.
+ * @param {boolean} isPaused - True if the pipeline stage is currently paused.
+ */
 function updatePauseButton(btnId, isPaused) {
     const btn = document.getElementById(btnId);
     if (!btn) return;
@@ -494,6 +653,14 @@ function updatePauseButton(btnId, isPaused) {
     btn.textContent = isPaused ? "▶ Resume" : "⏸ Pause";
 }
 
+/**
+ * Update a pipeline stage label element with 'Processing HH:MM:SS' or 'Idle'.
+ * Records the start time in state when a stage transitions to active.
+ *
+ * @param {HTMLElement|null} el - Label element to update.
+ * @param {string} key - State key ('ingest', 'transform', 'vectorize').
+ * @param {boolean} isProcessing - True if the stage is currently active.
+ */
 function setProcessingLabel(el, key, isProcessing) {
     if (!el) return;
     if (isProcessing) {
@@ -506,6 +673,10 @@ function setProcessingLabel(el, key, isProcessing) {
     }
 }
 
+/**
+ * Tick all active pipeline stage labels to show the current elapsed time.
+ * Called by a 1-second interval while the dashboard tab is visible.
+ */
 function updateElapsedLabels() {
     const now = Date.now();
     for (const [key, id] of [["ingest", "label-ingest"], ["transform", "label-transform"], ["vectorize", "label-vectorize"]]) {
@@ -519,6 +690,10 @@ function updateElapsedLabels() {
     }
 }
 
+/**
+ * Fetch the dashboard state from the API and update all metric cards, processing indicators,
+ * pause buttons, and the source URL link.
+ */
 async function loadDashboard() {
     const elRaw = document.getElementById("dash-metrics-raw");
     const elTf = document.getElementById("dash-metrics-transform");
@@ -628,6 +803,10 @@ const usersCreateError = document.getElementById("users-create-error");
 const usersCreateOk    = document.getElementById("users-create-ok");
 const refreshUsersBtn  = document.getElementById("refresh-users-btn");
 
+/**
+ * Fetch the list of chat users from the API and populate the users table.
+ * Each row has a delete button that calls DELETE /users/{username} with a confirmation prompt.
+ */
 async function loadUsers() {
     if (usersEmpty) usersEmpty.hidden = true;
     if (usersTableBody) usersTableBody.innerHTML = "";
@@ -711,6 +890,10 @@ refreshUsersBtn?.addEventListener("click", () => {
     loadUsers().catch((e) => console.error("users refresh", e));
 });
 
+/**
+ * Fetch the 500 most recent chat interactions from the API and populate the responses table
+ * with question, answer, rating emoji, and optional correction text.
+ */
 async function loadResponses() {
     if (responsesEmpty) responsesEmpty.hidden = true;
     if (responsesTableBody) responsesTableBody.innerHTML = "";
@@ -742,6 +925,13 @@ async function loadResponses() {
     }
 }
 
+/**
+ * Switch the visible tab and trigger lazy loading of its data.
+ * Starts the dashboard poll and elapsed-time ticker when switching to the dashboard tab,
+ * and clears them when leaving it.
+ *
+ * @param {'dashboard'|'document-status'|'raw-data'|'users'|'responses'} nextTab - Tab identifier.
+ */
 function setActiveTab(nextTab) {
     state.activeTab = nextTab;
     const dashboardIsActive = nextTab === "dashboard";
@@ -893,6 +1083,11 @@ rawDataTable?.querySelector("thead")?.addEventListener("click", (e) => {
     refreshRawDataTable();
 });
 
+/**
+ * Toggle the pause/resume state of a pipeline stage by calling the appropriate dashboard endpoint.
+ *
+ * @param {'ingest'|'transform'|'vectorize'} stage - Pipeline stage to pause or resume.
+ */
 async function togglePause(stage) {
     const btn = document.getElementById(`btn-pause-${stage}`);
     if (!btn) return;
@@ -1003,6 +1198,10 @@ document.querySelector("#dash-card-milvus .btn-re-vectorize")?.addEventListener(
     }
 });
 
+/**
+ * Poll the pipeline status endpoint and update the connection indicator in the header.
+ * Called every 30 seconds via setInterval.
+ */
 async function pollStatus() {
     try {
         const res = await fetch("/status", { headers: apiHeaders() });
@@ -1021,6 +1220,10 @@ async function pollStatus() {
     }
 }
 
+/**
+ * Initialize the main application by showing the dashboard tab and starting the status poll.
+ * The status poll is started only once per page load.
+ */
 function showMainApp() {
     setActiveTab("dashboard");
     if (!statusPollStarted) {

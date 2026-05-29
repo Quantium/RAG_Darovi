@@ -43,10 +43,23 @@ class RawCandidate:
 
 class MetadataRepository:
     def __init__(self, engine: Engine) -> None:
+        """Initialize the repository with a SQLAlchemy engine.
+
+        Args:
+            engine: Connected SQLAlchemy engine bound to the project database.
+        """
         self._engine = engine
         self._lock_conn: Connection | None = None
 
     def try_acquire_lock(self, lock_id: int) -> bool:
+        """Attempt to acquire a PostgreSQL advisory lock to prevent concurrent extraction runs.
+
+        Args:
+            lock_id: Integer lock identifier (should be consistent across all extract_text workers).
+
+        Returns:
+            True if the lock was acquired (or the dialect is not PostgreSQL), False if already held.
+        """
         if self._engine.dialect.name != "postgresql":
             return True
         conn = self._engine.connect()
@@ -58,6 +71,11 @@ class MetadataRepository:
         return False
 
     def release_lock(self, lock_id: int) -> None:
+        """Release the PostgreSQL advisory lock acquired by try_acquire_lock.
+
+        Args:
+            lock_id: Integer lock identifier matching the one passed to try_acquire_lock.
+        """
         if self._engine.dialect.name != "postgresql":
             return
         if self._lock_conn is None:
@@ -69,6 +87,17 @@ class MetadataRepository:
             self._lock_conn = None
 
     def list_raw_changed_candidates(self, batch_size: int) -> Sequence[RawCandidate]:
+        """Fetch file records that have new raw content not yet reflected in extracted text.
+
+        Only returns records with raw_status='synced', a non-null checksum, and either
+        no extracted text or a stale text_source_checksum.
+
+        Args:
+            batch_size: Maximum number of candidates to return per call.
+
+        Returns:
+            Sequence of RawCandidate dataclass instances ready for text extraction.
+        """
         with self._engine.begin() as conn:
             rows = conn.execute(
                 text(
@@ -98,6 +127,11 @@ class MetadataRepository:
         return [_map_candidate(r) for r in rows]
 
     def mark_text_processing(self, drive_file_id: str) -> None:
+        """Set text_status to 'processing' and clear any previous text_error for a file.
+
+        Args:
+            drive_file_id: Unique identifier of the file record to update.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -118,6 +152,14 @@ class MetadataRepository:
         text_source_checksum: str,
         text_checksum: str,
     ) -> None:
+        """Record successful text extraction and advance the file to 'ready_for_embedding'.
+
+        Args:
+            drive_file_id: Unique identifier of the file record to update.
+            minio_text_key: MinIO object key where the extracted text was stored.
+            text_source_checksum: Checksum of the raw file that produced this text.
+            text_checksum: Checksum of the extracted text content itself.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -151,6 +193,14 @@ class MetadataRepository:
         text_source_checksum: str,
         text_checksum: str,
     ) -> None:
+        """Record extracted text containing vision sentinels and set status to 'vision_pending'.
+
+        Args:
+            drive_file_id: Unique identifier of the file record to update.
+            minio_text_key: MinIO object key where the sentinel-containing text was stored.
+            text_source_checksum: Checksum of the raw file that produced this text.
+            text_checksum: Checksum of the text with sentinels.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -177,6 +227,12 @@ class MetadataRepository:
             )
 
     def mark_text_failed(self, drive_file_id: str, error_message: str) -> None:
+        """Record a text extraction failure in the database.
+
+        Args:
+            drive_file_id: Unique identifier of the file record to update.
+            error_message: Human-readable error description, truncated to 4000 characters.
+        """
         with self._engine.begin() as conn:
             conn.execute(
                 text(
@@ -194,12 +250,31 @@ class MetadataRepository:
 
 
 def create_repository(settings: Settings) -> MetadataRepository:
+    """Create a MetadataRepository after validating the database schema.
+
+    Args:
+        settings: Application settings providing the database connection URL.
+
+    Returns:
+        Ready-to-use MetadataRepository instance.
+
+    Raises:
+        RuntimeError: If required tables or columns are missing from the database schema.
+    """
     engine = create_engine(settings.database_url_sync.get_secret_value())
     _assert_schema_compatible(engine)
     return MetadataRepository(engine)
 
 
 def _map_candidate(row: RowMapping) -> RawCandidate:
+    """Map a raw database row to a RawCandidate dataclass.
+
+    Args:
+        row: SQLAlchemy RowMapping from a file_records query.
+
+    Returns:
+        RawCandidate populated with the row's field values.
+    """
     return RawCandidate(
         drive_file_id=row["drive_file_id"],
         name=row["name"],

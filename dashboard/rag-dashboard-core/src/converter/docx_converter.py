@@ -50,6 +50,14 @@ class DocxConverter(FileConverter):
             raise
 
     def _format_table(self, table: docx.table.Table) -> str:
+        """Format a DOCX table as a Markdown table string.
+
+        Args:
+            table: python-docx Table object to format.
+
+        Returns:
+            Markdown-formatted table string with header separator after the first row.
+        """
         lines = []
         for i, row in enumerate(table.rows):
             cells = [cell.text.strip() for cell in row.cells]

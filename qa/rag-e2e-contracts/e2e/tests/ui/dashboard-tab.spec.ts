@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies the dashboard tab renders pipeline metric cards correctly. */
 test.describe("dashboard tab", () => {
   test("switches to Dashboard and shows RAW card metrics", async ({ page }) => {
     await page.goto("/");

@@ -14,6 +14,7 @@ from src.api.app import create_app
 
 @pytest.fixture
 async def app_mocked(mock_milvus_client, mock_redis_client):
+    """Return a FastAPI test app with all external dependencies mocked."""
     app = create_app()
     app.state.settings = Settings()
     app.state.engine = AsyncMock()

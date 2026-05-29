@@ -18,6 +18,17 @@ logger = structlog.get_logger()
 
 class ImageConverter:
     def convert(self, raw_bytes: bytes, file_name: str, mime_type: str) -> str:
+        """Emit a single VISION_NEEDED sentinel for the image, deferring OCR to the VLM stage.
+
+        Args:
+            raw_bytes: Raw image file bytes.
+            file_name: Original file name for logging.
+            mime_type: Image MIME type (e.g. 'image/png').
+
+        Returns:
+            A '--- PAGE 1 ---' block containing a single VISION_NEEDED sentinel, or
+            an empty string if raw_bytes is empty.
+        """
         if not raw_bytes:
             logger.info("converter.image.empty", file_name=file_name, mime_type=mime_type)
             return ""

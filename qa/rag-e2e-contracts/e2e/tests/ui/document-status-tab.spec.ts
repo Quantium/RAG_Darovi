@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies the document status tab shows file records with correct status and raw-text availability. */
 test.describe("document status tab", () => {
   test("shows extracted documents and extraction status", async ({ page }) => {
     await page.goto("/");

@@ -14,6 +14,7 @@ from src.api.app import create_app
 class TestAPIRoutes:
     @pytest.mark.integration
     async def test_chat_endpoint_returns_answer(self, app_mocked):
+        """Verify POST /chat returns HTTP 200 with the mocked LLM answer."""
         async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
             response = await client.post("/chat", json={"query": "What is revenue?"})
             assert response.status_code == 200
@@ -23,6 +24,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_chat_endpoint_includes_references(self, app_mocked):
+        """Verify POST /chat includes source references when the retriever returns chunks."""
         from src.rag.retriever import RetrievedChunk
 
         app_mocked.state.retriever.retrieve.return_value = [
@@ -38,6 +40,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_status_endpoint(self, app_mocked):
+        """Verify GET /status returns HTTP 200 with total_files count."""
         with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
             mock_repo = mock_repo_cls.return_value
             mock_repo.list_by_status = AsyncMock(return_value=[])
@@ -48,6 +51,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_status_files_endpoint(self, app_mocked):
+        """Verify GET /status/files returns HTTP 200 with a list payload."""
         with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
             mock_repo = mock_repo_cls.return_value
             mock_repo.list_by_status = AsyncMock(return_value=[])
@@ -58,6 +62,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_status_files_endpoint_reports_raw_text_availability(self, app_mocked):
+        """Verify GET /status/files correctly reflects MinIO text object availability per file."""
         available_record = MagicMock()
         available_record.drive_file_id = "file-1"
         available_record.name = "Invoice-April.pdf"
@@ -96,6 +101,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_status_raw_data_endpoint_returns_extracted_text(self, app_mocked):
+        """Verify GET /status/raw-data returns extracted text fetched from MinIO."""
         record = MagicMock()
         record.drive_file_id = "file-1"
         record.name = "Invoice-April.pdf"
@@ -121,6 +127,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_open_file_redirects_to_google_drive_in_drive_mode(self, app_mocked):
+        """Verify GET /files/{id}/open redirects to Google Drive when ingest_source='drive'."""
         app_mocked.state.settings = Settings(ingest_source="drive")
         record = MagicMock()
         record.drive_file_id = "file-1"
@@ -139,6 +146,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_open_file_streams_raw_file_in_local_mode(self, app_mocked):
+        """Verify GET /files/{id}/open streams raw MinIO bytes when ingest_source='local'."""
         app_mocked.state.settings = Settings(ingest_source="local")
         record = MagicMock()
         record.drive_file_id = "file-1"
@@ -161,6 +169,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_generate_sql_endpoint(self, app_mocked):
+        """Verify POST /generate-sql returns HTTP 200 with a job_id field."""
         with patch("redis.Redis.from_url"):
             with patch("src.worker.tasks.run_sql_generation.delay"):
                 async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
@@ -170,6 +179,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_ingest_endpoint_dispatches_job(self, app_mocked):
+        """Verify POST /ingest dispatches a Celery incremental sync task and returns 'queued'."""
         with patch("src.worker.tasks.run_incremental_sync.delay") as mock_delay:
             async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
                 response = await client.post("/ingest")
@@ -181,6 +191,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_restart_ingest_endpoint_dispatches_job(self, app_mocked):
+        """Verify POST /ingest/restart dispatches a restart-ingest task and returns 'queued'."""
         with patch("src.worker.tasks.restart_ingest.delay") as mock_delay:
             async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
                 response = await client.post("/ingest/restart")
@@ -192,6 +203,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_generate_sql_poll(self, app_mocked):
+        """Verify GET /generate-sql/{job_id} returns the current job status from Redis."""
         with patch("redis.Redis.from_url") as mock_redis:
             mock_client = mock_redis.return_value
             mock_client.hgetall.return_value = {b"status": b"pending"}
@@ -202,6 +214,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_chat_returns_conversation_id(self, app_mocked):
+        """Verify POST /chat response includes a non-empty conversation_id."""
         async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
             response = await client.post("/chat", json={"query": "What is revenue?"})
             data = response.json()
@@ -210,6 +223,7 @@ class TestAPIRoutes:
 
     @pytest.mark.integration
     async def test_websocket_chat(self, app_mocked):
+        """Verify the WebSocket /ws/chat endpoint streams tokens and sends a final 'done' frame."""
         from fastapi.testclient import TestClient
 
         # Setup streaming mock as a regular function returning an async generator
@@ -239,6 +253,7 @@ class TestAPIRoutes:
 class TestAPIAuth:
     @pytest.fixture
     async def app_with_key(self, mock_milvus_client, mock_redis_client):
+        """Return a test app configured with API_KEY='test-secret-key'."""
         with patch.dict("os.environ", {"API_KEY": "test-secret-key"}):
             app = create_app()
             app.state.settings = Settings()
@@ -254,12 +269,14 @@ class TestAPIAuth:
 
     @pytest.mark.integration
     async def test_api_key_auth_rejects_invalid_key(self, app_with_key):
+        """Verify GET /status returns HTTP 401 when an incorrect X-API-Key is provided."""
         async with AsyncClient(transport=ASGITransport(app=app_with_key), base_url="http://test") as client:
             response = await client.get("/status", headers={"X-API-Key": "wrong-key"})
             assert response.status_code == 401
 
     @pytest.mark.integration
     async def test_api_key_auth_allows_valid_key(self, app_with_key):
+        """Verify GET /status returns HTTP 200 when the correct X-API-Key is provided."""
         with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
             mock_repo = mock_repo_cls.return_value
             mock_repo.list_by_status = AsyncMock(return_value=[])
@@ -269,6 +286,7 @@ class TestAPIAuth:
 
     @pytest.mark.integration
     async def test_api_key_auth_disabled_when_empty(self, app_mocked):
+        """Verify GET /status returns HTTP 200 when no API key is configured (auth disabled)."""
         with patch("src.metadata.repository.MetadataRepository") as mock_repo_cls:
             mock_repo = mock_repo_cls.return_value
             mock_repo.list_by_status = AsyncMock(return_value=[])
@@ -282,6 +300,7 @@ class TestGoogleOAuthCallbackRouting:
 
     @pytest.mark.integration
     async def test_oauth_callback_with_google_query_params_not_404(self, app_mocked):
+        """Regression: verify GET /auth/google/callback is handled by the API, not the static file handler."""
         async with AsyncClient(transport=ASGITransport(app=app_mocked), base_url="http://test") as client:
             response = await client.get(
                 "/auth/google/callback",
@@ -298,6 +317,7 @@ class TestGoogleOAuthCallbackRouting:
 class TestDriveBootstrap:
     @pytest.mark.integration
     async def test_drive_bootstrap_local_mode_is_chat_ready(self, app_mocked):
+        """Verify GET /drive/bootstrap returns chat_ready=True when ingest_source='local'."""
         app_mocked.state.settings = Settings(ingest_source="local", local_source_folder="/tmp/docs")
         with patch("src.api.drive_routes.MetadataRepository") as mock_repo_cls:
             mock_repo = mock_repo_cls.return_value

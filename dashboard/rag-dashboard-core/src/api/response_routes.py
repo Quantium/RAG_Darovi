@@ -11,6 +11,14 @@ response_router = APIRouter(prefix="/responses", tags=["responses"])
 
 @response_router.get("", dependencies=[Depends(verify_api_key)])
 async def list_responses(request: Request) -> list[dict]:
+    """Return the 500 most recent chat interactions with their ratings and corrections.
+
+    Args:
+        request: Incoming FastAPI request carrying app state.
+
+    Returns:
+        List of dicts with id, conversation_id, question, answer, rating, correction, and created_at.
+    """
     async with AsyncSession(request.app.state.engine) as session:
         result = await session.execute(
             text(

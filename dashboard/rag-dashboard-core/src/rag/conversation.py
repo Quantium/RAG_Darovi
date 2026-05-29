@@ -27,9 +27,22 @@ class ConversationTurn:
 
 class ConversationStore:
     def __init__(self, redis_url: str) -> None:
+        """Initialize the store with a Redis URL.
+
+        Args:
+            redis_url: Redis connection URL (e.g. 'redis://redis:6379/2').
+        """
         self._redis = redis.Redis.from_url(redis_url)
 
     def get_history(self, conversation_id: str) -> list[ConversationTurn]:
+        """Retrieve the conversation turn history from Redis.
+
+        Args:
+            conversation_id: Unique identifier of the conversation.
+
+        Returns:
+            Ordered list of ConversationTurn objects, or an empty list on error or cache miss.
+        """
         try:
             raw = self._redis.get(f"conv:{conversation_id}")
             if not raw:
@@ -42,6 +55,15 @@ class ConversationStore:
             return []
 
     def append(self, conversation_id: str, role: str, content: str) -> None:
+        """Append a new turn to the conversation and persist it in Redis with a TTL.
+
+        Trims the history to at most MAX_HISTORY_TURNS * 2 entries to bound context size.
+
+        Args:
+            conversation_id: Unique identifier of the conversation.
+            role: Speaker role, either 'user' or 'assistant'.
+            content: Text content of the turn.
+        """
         try:
             history = self.get_history(conversation_id)
             history.append(ConversationTurn(role=role, content=content))
@@ -57,6 +79,11 @@ class ConversationStore:
             logger.warning("conversation.append_error", conversation_id=conversation_id, error=str(exc))
 
     def clear(self, conversation_id: str) -> None:
+        """Delete the conversation history key from Redis.
+
+        Args:
+            conversation_id: Unique identifier of the conversation to clear.
+        """
         try:
             self._redis.delete(f"conv:{conversation_id}")
         except Exception as exc:

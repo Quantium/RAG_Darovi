@@ -1,6 +1,8 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies the theme toggle switches data-theme on the body and persists the choice to localStorage. */
 test.describe("theme toggle", () => {
+  /** Clear the rag_theme key before each test to start from a known state. */
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.removeItem("rag_theme");

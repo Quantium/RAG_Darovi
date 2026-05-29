@@ -11,6 +11,14 @@ _app_state: dict[str, Any] = {}
 
 
 def configure_http_api(*, service: Any, settings: Any) -> None:
+    """Inject the ExtractTextService and Settings into the HTTP API's global state.
+
+    Must be called before the first request is handled.
+
+    Args:
+        service: An ExtractTextService instance to use for on-demand runs.
+        settings: Application settings (stored for potential future route use).
+    """
     _app_state["service"] = service
     _app_state["settings"] = settings
     _app_state["last_result"] = None
@@ -28,11 +36,13 @@ class TriggerAccepted(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Return a simple liveness check payload."""
     return {"status": "ok"}
 
 
 @app.get("/trigger/state")
 def trigger_state() -> dict[str, Any]:
+    """Return the service readiness state and results of the last extraction run."""
     return {
         "service_ready": _app_state.get("service") is not None,
         "last_run": _app_state.get("last_result"),
@@ -42,6 +52,11 @@ def trigger_state() -> dict[str, Any]:
 
 @app.post("/trigger/run", response_model=TriggerAccepted)
 def trigger_run() -> TriggerAccepted:
+    """Trigger an on-demand extraction run and return the result synchronously.
+
+    Returns:
+        TriggerAccepted indicating success or failure, with scanned/updated/failed counts on success.
+    """
     svc = _app_state.get("service")
     if svc is None:
         return TriggerAccepted(accepted=False, error="service not configured")

@@ -520,6 +520,23 @@ def _tesseract_fallback_text(
     redis_client,
     logger_,
 ) -> str:
+    """Attempt Tesseract OCR as a fallback when the VLM is unavailable or fails.
+
+    Pushes the failure to the dead-letter queue and returns a placeholder string
+    if Tesseract is disabled or also fails.
+
+    Args:
+        tesseract_fallback: Configured Tesseract helper, or None if disabled.
+        raw_bytes: Raw file content bytes.
+        mime_type: MIME type of the file being processed.
+        page_num: 1-based page number to OCR.
+        drive_file_id: Unique identifier of the source file (for DLQ context).
+        redis_client: Redis client for pushing DLQ entries.
+        logger_: Bound structlog logger for this task invocation.
+
+    Returns:
+        OCR text string, or a '[OCR FAILED page N]' placeholder on total failure.
+    """
     if tesseract_fallback is None:
         logger_.warning("vision.fallback_disabled", page=page_num)
         return f"[OCR FAILED page {page_num}]"
@@ -545,6 +562,15 @@ def _tesseract_fallback_text(
 
 
 def _push_to_dlq(redis_client, drive_file_id: str, page: int, error: str, logger_) -> None:
+    """Push a failed vision extraction entry to the Redis dead-letter queue.
+
+    Args:
+        redis_client: Redis client for the lpush operation.
+        drive_file_id: Unique identifier of the file that failed.
+        page: Page number that could not be OCR'd.
+        error: Human-readable error description.
+        logger_: Bound structlog logger for warning on DLQ push failure.
+    """
     payload = json.dumps({"drive_file_id": drive_file_id, "page": page, "error": error})
     try:
         redis_client.lpush(VISION_DLQ_KEY, payload)
@@ -553,6 +579,14 @@ def _push_to_dlq(redis_client, drive_file_id: str, page: int, error: str, logger
 
 
 def _kv_to_dict(kv) -> dict:
+    """Serialize an ExtractedDocumentSchema to a plain dict for storage.
+
+    Args:
+        kv: An ExtractedDocumentSchema instance.
+
+    Returns:
+        Dict with document_type, issuer, issued_at, total_amount, currency, parties, and extras.
+    """
     return {
         "document_type": kv.document_type,
         "issuer": kv.issuer,
@@ -923,4 +957,14 @@ def poll_vision_pending(self):
 
 
 def _build_sync_downloader(settings, storage, repo):
+    """Construct the appropriate downloader based on the configured ingest source.
+
+    Args:
+        settings: Application settings providing ingest source configuration.
+        storage: MinIOStorage instance for uploading raw files.
+        repo: SyncMetadataRepository instance for updating file records.
+
+    Returns:
+        A LocalFolderDownloader (or other SourceDownloader) ready to sync files.
+    """
     return LocalFolderDownloader(storage=storage, metadata_repo=repo, settings=settings)

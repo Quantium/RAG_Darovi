@@ -10,14 +10,17 @@ from src.api.schemas import ChatRequest, ChatResponse, SourceReference, StatusRe
 
 class TestAPISchemas:
     def test_chat_request_validation(self):
+        """Verify ChatRequest accepts a valid non-empty query string."""
         req = ChatRequest(query="What is revenue?")
         assert req.query == "What is revenue?"
 
     def test_chat_request_rejects_empty(self):
+        """Verify ChatRequest raises ValidationError when the query is an empty string."""
         with pytest.raises(ValidationError):
             ChatRequest(query="")
 
     def test_chat_response_structure(self):
+        """Verify ChatResponse accepts a valid answer, sources list, and conversation_id."""
         resp = ChatResponse(
             answer="Revenue was $1.2M",
             sources=[
@@ -36,6 +39,7 @@ class TestAPISchemas:
         assert len(resp.sources) == 1
 
     def test_status_response_structure(self):
+        """Verify StatusResponse stores total_files and per-status counts correctly."""
         resp = StatusResponse(total_files=100, pending=10, downloaded=20, converted=30, embedded=35, failed=5)
         assert resp.total_files == 100
         assert resp.failed == 5

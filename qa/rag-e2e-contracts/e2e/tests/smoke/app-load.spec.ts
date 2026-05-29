@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E smoke suite: verifies the app loads with the correct title, greeting, and status indicator. */
 test.describe("app load", () => {
   test("shows title and initial assistant greeting", async ({ page }) => {
     await page.goto("/");

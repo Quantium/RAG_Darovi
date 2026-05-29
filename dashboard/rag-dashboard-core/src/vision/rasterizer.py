@@ -18,6 +18,14 @@ logger = structlog.get_logger()
 
 
 def is_image_mime(mime_type: str) -> bool:
+    """Return True if the MIME type represents a raster image format.
+
+    Args:
+        mime_type: MIME type string to check.
+
+    Returns:
+        True if the type starts with 'image/', False otherwise.
+    """
     return mime_type.startswith("image/")
 
 

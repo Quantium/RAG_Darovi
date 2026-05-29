@@ -12,6 +12,11 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_module():
+    """Reload the app.api module in isolation to avoid cross-test state contamination.
+
+    Returns:
+        The freshly imported app.api module object.
+    """
     for module_name in [name for name in list(sys.modules) if name == "app" or name.startswith("app.")]:
         del sys.modules[module_name]
     sys.path.insert(0, str(SERVICE_ROOT))
@@ -22,6 +27,7 @@ def _load_module():
 
 
 def test_retrieval_admin_health_endpoint():
+    """Verify that GET /health returns HTTP 200 with status 'ok'."""
     module = _load_module()
     with patch.object(module, "MetadataService", autospec=True) as metadata_cls, patch.object(
         module, "Retriever", autospec=True

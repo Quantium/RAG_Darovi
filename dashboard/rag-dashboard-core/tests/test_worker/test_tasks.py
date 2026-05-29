@@ -34,6 +34,7 @@ class TestWorkerTasks:
         _mock_effective_folder,
         mock_drive_service,
     ):
+        """Verify run_incremental_sync uses LocalFolderDownloader and skips Drive when ingest_source='local'."""
         mock_build_settings.return_value = Settings(ingest_source="local", local_source_folder="/tmp/docs")
         mock_redis_cls.from_url.return_value.set.return_value = True
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
@@ -50,6 +51,7 @@ class TestWorkerTasks:
     @patch("src.worker.tasks.build_metadata_repo")
     @patch("src.worker.tasks.build_settings")
     def test_download_task_calls_downloader(self, mock_build_settings, mock_repo_builder, mock_dl_cls, mock_build_service, _ef):
+        """Verify download_file calls the Drive downloader and returns a dict with drive_file_id."""
         mock_build_settings.return_value = Settings(ingest_source="drive")
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
         mock_dl = mock_dl_cls.return_value
@@ -63,6 +65,7 @@ class TestWorkerTasks:
     @patch("src.converter.get_converter")
     @patch("src.worker.tasks.build_metadata_repo")
     def test_convert_task_calls_converter(self, mock_repo_builder, mock_get_converter, mock_storage_builder):
+        """Verify convert_file downloads bytes, converts them, uploads text, and returns minio_text_key."""
         mock_repo = MagicMock()
         mock_repo_builder.return_value = (mock_repo, lambda: None)
         mock_storage = MagicMock()
@@ -86,6 +89,7 @@ class TestWorkerTasks:
         mock_converter.convert.assert_called_once()
 
     def test_embed_task_calls_embedder(self):
+        """Verify embed_file returns a chunk_count from the mocked async embedding run."""
         with patch("src.worker.tasks.build_settings"):
             with patch("src.worker.tasks.build_storage") as mock_storage_builder:
                 with patch("src.worker.tasks.asyncio.run") as mock_run:
@@ -105,6 +109,7 @@ class TestWorkerTasks:
                     assert result["chunk_count"] == 10
 
     def test_task_chain_download_convert_embed(self):
+        """Verify the download → convert → embed task chain can be constructed without error."""
         from celery import chain
 
         pipeline = chain(download_file.s({}), convert_file.s(), embed_file.s())
@@ -116,6 +121,7 @@ class TestWorkerTasks:
     @patch("src.worker.tasks.build_metadata_repo")
     @patch("src.worker.tasks.build_settings")
     def test_task_retry_on_failure(self, mock_build_settings, mock_repo_builder, mock_dl_cls, mock_build_service, _ef):
+        """Verify download_file propagates ConnectionError to the caller for Celery retry handling."""
         mock_build_settings.return_value = Settings(ingest_source="drive")
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
         mock_dl = mock_dl_cls.return_value
@@ -125,6 +131,7 @@ class TestWorkerTasks:
 
     @patch("src.worker.task_helpers.SyncMetadataRepository")
     def test_task_marks_failed_after_max_retries(self, mock_repo_cls):
+        """Verify RetryableTask.on_failure marks the file record as 'failed' with the error message."""
         mock_repo = mock_repo_cls.return_value
         mock_repo.update_status_sync = MagicMock()
 
@@ -138,6 +145,7 @@ class TestWorkerTasks:
     @patch("src.worker.tasks.build_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     def test_delete_file_vectors_removes_all(self, mock_storage_builder, mock_repo_builder, mock_milvus_store_cls):
+        """Verify delete_file_vectors deletes the DB record and Milvus vectors for a file."""
         mock_repo = MagicMock()
         mock_repo_builder.return_value = (mock_repo, lambda: None)
         mock_milvus_store = mock_milvus_store_cls.return_value
@@ -149,6 +157,7 @@ class TestWorkerTasks:
 
     @patch("src.worker.tasks.redis.Redis")
     def test_sync_acquires_distributed_lock(self, mock_redis_cls):
+        """Verify run_incremental_sync exits early without starting a downloader when the lock is held."""
         mock_redis = mock_redis_cls.from_url.return_value
         mock_redis.set.return_value = False  # lock not acquired
 
@@ -159,6 +168,7 @@ class TestWorkerTasks:
     @patch("src.worker.tasks.redis.Redis")
     @patch("src.worker.tasks.build_settings")
     def test_sync_skips_when_legacy_pipeline_disabled(self, mock_build_settings, mock_redis_cls):
+        """Verify run_incremental_sync returns immediately when the legacy pipeline is disabled."""
         mock_build_settings.return_value = Settings(legacy_ingest_pipeline_enabled=False)
         run_incremental_sync()
         mock_redis_cls.from_url.assert_not_called()
@@ -182,6 +192,7 @@ class TestWorkerTasks:
         mock_build_service,
         _ef,
     ):
+        """Verify run_incremental_sync queues delete_file_vectors tasks for files removed from the source."""
         mock_build_settings.return_value = Settings(ingest_source="drive")
         mock_redis_cls.from_url.return_value.set.return_value = True
         mock_repo_builder.return_value = (MagicMock(), lambda: None)
@@ -198,6 +209,7 @@ class TestWorkerTasks:
     @patch("src.worker.tasks.build_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     def test_convert_task_skips_unsupported_mime(self, mock_storage_builder, mock_repo_builder, mock_get_converter):
+        """Verify convert_file marks the record as 'skipped' and returns skipped=True for unsupported MIME types."""
         mock_repo = MagicMock()
         mock_repo_builder.return_value = (mock_repo, lambda: None)
         mock_get_converter.side_effect = ValueError("Unsupported")
@@ -216,6 +228,7 @@ class TestWorkerTasks:
     def test_restart_ingest_cleans_and_requeues(
         self, _mock_settings, mock_storage_builder, mock_repo_builder, mock_run_incremental_sync, mock_milvus_store_cls
     ):
+        """Verify restart_ingest wipes Milvus, MinIO objects, and DB records before requeueing sync."""
         mock_repo = MagicMock()
         record = MagicMock()
         record.drive_file_id = "f1"
@@ -247,6 +260,7 @@ class TestWorkerTasks:
         mock_repo_builder,
         mock_dispatch_downstream,
     ):
+        """Verify poll_text_ready_for_embedding marks files as 'embedding_queued' and dispatches downstream pipeline."""
         mock_repo = MagicMock()
         record = MagicMock()
         record.drive_file_id = "f1"

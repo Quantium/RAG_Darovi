@@ -12,6 +12,11 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_retrieval_client_module():
+    """Reload the app.retrieval_client module in isolation to avoid cross-test state contamination.
+
+    Returns:
+        The freshly imported app.retrieval_client module object.
+    """
     for module_name in [name for name in list(sys.modules) if name == "app" or name.startswith("app.")]:
         del sys.modules[module_name]
     sys.path.insert(0, str(SERVICE_ROOT))
@@ -23,6 +28,7 @@ def _load_retrieval_client_module():
 
 @pytest.mark.asyncio
 async def test_retrieval_client_parses_contract_response() -> None:
+    """Verify that RetrievalClient correctly deserializes a valid retrieval service response."""
     module = _load_retrieval_client_module()
     settings = module.Settings(retrieval_admin_base_url="http://retrieval-admin:8010")
 

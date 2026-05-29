@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies clearing the chat history resets the message list and allows subsequent messages. */
 test.describe("clear chat", () => {
   test("resets messages and shows greeting; allows new messages", async ({ page }) => {
     await page.goto("/");

@@ -1,8 +1,14 @@
 // ── Auth state ────────────────────────────────────────────────────────────────
 const TOKEN_KEY = "chatbot_token";
 
+/** @returns {string|null} The stored session token, or null if not logged in. */
 function getToken() { return localStorage.getItem(TOKEN_KEY); }
+/**
+ * Persist the session token to localStorage.
+ * @param {string} t - Session token received from the login endpoint.
+ */
 function saveToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+/** Remove the session token from localStorage, effectively logging the user out locally. */
 function clearToken() { localStorage.removeItem(TOKEN_KEY); }
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -19,11 +25,13 @@ const sourcesEl    = document.getElementById("sources");
 let conversationId = null;
 
 // ── Show/hide sections ────────────────────────────────────────────────────────
+/** Show the chat panel and hide the login section. */
 function showChat() {
   loginSection.hidden = true;
   chatSection.hidden = false;
 }
 
+/** Show the login section and hide the chat panel. */
 function showLogin() {
   loginSection.hidden = false;
   chatSection.hidden = true;
@@ -81,6 +89,13 @@ logoutBtn.addEventListener("click", async () => {
 });
 
 // ── Chat helpers ──────────────────────────────────────────────────────────────
+/**
+ * Append a chat message bubble to the messages container.
+ *
+ * @param {string} role - Speaker role: 'user' or 'assistant'.
+ * @param {string} text - Message content; Markdown is rendered for assistant messages.
+ * @returns {HTMLElement} The newly created message element.
+ */
 function addMessage(role, text) {
   const el = document.createElement("div");
   el.className = `msg ${role}`;
@@ -94,6 +109,12 @@ function addMessage(role, text) {
   return el;
 }
 
+/**
+ * Render the source references table below the chat messages.
+ *
+ * @param {Array<{source_name: string, text_preview: string, score: number, file_url: string|null}>} sources
+ *   Array of source reference objects from the API response.
+ */
 function renderSources(sources) {
   if (!sources || sources.length === 0) {
     sourcesEl.innerHTML = "";
@@ -115,6 +136,12 @@ function renderSources(sources) {
 }
 
 // ── Rating ────────────────────────────────────────────────────────────────────
+/**
+ * Insert a thumbs-up / thumbs-down rating bar above the chat form.
+ * Removes any existing rating bar first to prevent duplicates.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction to rate.
+ */
 function addRatingButtons(interactionId) {
   document.querySelectorAll(".rating-bar").forEach(el => el.remove());
 
@@ -131,6 +158,13 @@ function addRatingButtons(interactionId) {
   form.parentNode.insertBefore(bar, form);
 }
 
+/**
+ * Handle a rating button click: submit positive directly or open correction dialog for negative.
+ *
+ * @param {string} rating - 'positive' or 'negative'.
+ * @param {number} interactionId - Primary key of the chat interaction being rated.
+ * @param {HTMLElement} bar - The rating bar element to remove after submission.
+ */
 async function handleRating(rating, interactionId, bar) {
   if (rating === "positive") {
     await postRating(interactionId, "positive", null);
@@ -140,6 +174,13 @@ async function handleRating(rating, interactionId, bar) {
   }
 }
 
+/**
+ * Inject a correction text area into the rating bar for negative feedback.
+ * Does nothing if a dialog is already visible.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction being corrected.
+ * @param {HTMLElement} bar - The rating bar element that will host the dialog.
+ */
 function showCorrectionDialog(interactionId, bar) {
   if (bar.querySelector(".correction-dialog")) return;
 
@@ -160,6 +201,13 @@ function showCorrectionDialog(interactionId, bar) {
   bar.appendChild(dialog);
 }
 
+/**
+ * POST the user's rating and optional correction text to the /rate endpoint.
+ *
+ * @param {number} interactionId - Primary key of the chat interaction.
+ * @param {string} rating - 'positive' or 'negative'.
+ * @param {string|null} correction - Corrected answer text, or null if not provided.
+ */
 async function postRating(interactionId, rating, correction) {
   try {
     await fetch("/rate", {

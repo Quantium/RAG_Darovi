@@ -16,6 +16,14 @@ class Base(DeclarativeBase):
 
 
 def _dialect_name_for_session(session: AsyncSession | Session) -> str:
+    """Return the dialect name ('postgresql', 'sqlite', etc.) for the given session.
+
+    Args:
+        session: SQLAlchemy sync or async session.
+
+    Returns:
+        Dialect name string, defaulting to 'sqlite' when the bind is None.
+    """
     bind = session.bind
     if bind is None:
         return "sqlite"
@@ -23,6 +31,15 @@ def _dialect_name_for_session(session: AsyncSession | Session) -> str:
 
 
 def _upsert_insert_for_session(session: AsyncSession | Session, model: type[Base]):
+    """Return the dialect-appropriate INSERT statement class for an upsert operation.
+
+    Args:
+        session: SQLAlchemy sync or async session used to detect the dialect.
+        model: ORM model class to build the insert statement for.
+
+    Returns:
+        A PostgreSQL or SQLite insert construct with on_conflict_do_update support.
+    """
     if _dialect_name_for_session(session) == "postgresql":
         return postgresql_insert(model)
     return sqlite_insert(model)
@@ -113,11 +130,27 @@ class ExtractedDocument(Base):
 
 class MetadataRepository:
     def __init__(self, session: AsyncSession) -> None:
+        """Initialize the async repository with an AsyncSession.
+
+        Args:
+            session: SQLAlchemy async database session.
+        """
         self._session = session
 
     async def create_file_record(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> FileRecord:
+        """Create a new file record with 'pending' status and return it.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            name: Display file name.
+            mime_type: MIME type string of the file.
+            drive_modified_at: Last-modified timestamp from the source.
+
+        Returns:
+            The freshly committed and refreshed FileRecord instance.
+        """
         record = FileRecord(
             drive_file_id=drive_file_id,
             name=name,
@@ -131,10 +164,25 @@ class MetadataRepository:
         return record
 
     async def get_file(self, drive_file_id: str) -> FileRecord | None:
+        """Fetch a single file record by its source identifier.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+
+        Returns:
+            FileRecord if found, or None if no matching row exists.
+        """
         result = await self._session.execute(select(FileRecord).where(FileRecord.drive_file_id == drive_file_id))
         return result.scalar_one_or_none()
 
     async def update_status(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
+        """Update the top-level processing status and optional error message for a file.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            status: New pipeline status value (e.g. 'downloaded', 'embedded', 'failed').
+            error_message: Optional error description to store alongside the status.
+        """
         await self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -143,6 +191,11 @@ class MetadataRepository:
         await self._session.commit()
 
     async def update_last_processed_at(self, drive_file_id: str) -> None:
+        """Stamp the current UTC time as last_processed_at for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+        """
         await self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -151,6 +204,14 @@ class MetadataRepository:
         await self._session.commit()
 
     async def list_by_status(self, status: str | None) -> Sequence[FileRecord]:
+        """Return all file records, optionally filtered to a specific status.
+
+        Args:
+            status: Pipeline status to filter on, or None to return all records.
+
+        Returns:
+            Sequence of FileRecord instances matching the filter.
+        """
         if status is None:
             result = await self._session.execute(select(FileRecord))
         else:
@@ -160,6 +221,14 @@ class MetadataRepository:
     async def upsert_file(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> None:
+        """Insert a new file record or reset it to 'pending' on conflict.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            name: Display file name.
+            mime_type: MIME type string of the file.
+            drive_modified_at: Last-modified timestamp from the source.
+        """
         stmt = _upsert_insert_for_session(self._session, FileRecord).values(
             drive_file_id=drive_file_id,
             name=name,
@@ -191,6 +260,15 @@ class MetadataRepository:
         raw_checksum: str | None = None,
         raw_status: str | None = None,
     ) -> None:
+        """Patch raw-stage columns for a file record, updating only provided fields.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_raw_key: MinIO object key for the raw file, if changed.
+            raw_source_version: Source version string, if changed.
+            raw_checksum: SHA-256 hex digest of the raw file, if changed.
+            raw_status: New raw pipeline status (e.g. 'synced'), if changed.
+        """
         values: dict[str, object] = {}
         if minio_raw_key is not None:
             values["minio_raw_key"] = minio_raw_key
@@ -216,6 +294,16 @@ class MetadataRepository:
         text_status: str | None = None,
         text_error: str | None = None,
     ) -> None:
+        """Patch text-stage columns for a file record, updating only provided fields.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_text_key: MinIO object key for the extracted text, if changed.
+            text_source_checksum: Checksum of the raw file this text was extracted from.
+            text_checksum: Checksum of the extracted text content itself.
+            text_status: New text pipeline status (e.g. 'ready_for_embedding').
+            text_error: Error description to store, or None to clear a previous error.
+        """
         values: dict[str, object] = {}
         if minio_text_key is not None:
             values["minio_text_key"] = minio_text_key
@@ -233,18 +321,35 @@ class MetadataRepository:
             await self._session.commit()
 
     async def list_ready_for_embedding(self) -> Sequence[FileRecord]:
+        """Return all file records with text_status='ready_for_embedding'.
+
+        Returns:
+            Sequence of FileRecord instances waiting to be embedded.
+        """
         result = await self._session.execute(
             select(FileRecord).where(FileRecord.text_status == "ready_for_embedding")
         )
         return result.scalars().all()
 
     async def update_chunk_count(self, drive_file_id: str, count: int) -> None:
+        """Update the stored chunk count for a file after embedding.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            count: Number of embedded chunks produced from this file.
+        """
         await self._session.execute(
             update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(chunk_count=count)
         )
         await self._session.commit()
 
     async def update_text_key(self, drive_file_id: str, minio_text_key: str) -> None:
+        """Update the MinIO text object key for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_text_key: New MinIO object key for the extracted text.
+        """
         await self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -253,12 +358,23 @@ class MetadataRepository:
         await self._session.commit()
 
     async def update_raw_key(self, drive_file_id: str, minio_raw_key: str) -> None:
+        """Update the MinIO raw object key for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_raw_key: New MinIO object key for the raw file.
+        """
         await self._session.execute(
             update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(minio_raw_key=minio_raw_key)
         )
         await self._session.commit()
 
     async def get_page_token(self) -> str:
+        """Retrieve the current sync page token, creating a blank entry if none exists.
+
+        Returns:
+            The stored sync token string, or an empty string for the first run.
+        """
         result = await self._session.execute(select(SyncState).where(SyncState.key == "drive_page_token"))
         state = result.scalar_one_or_none()
         if not state:
@@ -269,16 +385,27 @@ class MetadataRepository:
         return state.value
 
     async def update_page_token(self, token: str) -> None:
+        """Upsert the sync page token in the sync_state table.
+
+        Args:
+            token: New page token returned by the source after a sync cycle.
+        """
         stmt = _upsert_insert_for_session(self._session, SyncState).values(key="drive_page_token", value=token)
         stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value})
         await self._session.execute(stmt)
         await self._session.commit()
 
     async def delete_file_record(self, drive_file_id: str) -> None:
+        """Delete a single file record from the database.
+
+        Args:
+            drive_file_id: Unique source identifier of the file to delete.
+        """
         await self._session.execute(delete(FileRecord).where(FileRecord.drive_file_id == drive_file_id))
         await self._session.commit()
 
     async def delete_all_file_records(self) -> None:
+        """Delete all file records from the database."""
         await self._session.execute(delete(FileRecord))
         await self._session.commit()
 
@@ -294,6 +421,18 @@ class MetadataRepository:
         parties: list[str] | None = None,
         extras: dict[str, Any] | None = None,
     ) -> None:
+        """Insert or overwrite the extracted document record for a file.
+
+        Args:
+            drive_file_id: Unique source identifier linking this record to a file_records row.
+            document_type: Optional document classification string.
+            issuer: Optional issuer name from the document.
+            issued_at: Optional document issuance date.
+            total_amount: Optional monetary total extracted from the document.
+            currency: Optional ISO-4217 currency code.
+            parties: Optional list of parties named in the document.
+            extras: Optional dict of additional extracted key-value fields.
+        """
         values = dict(
             drive_file_id=drive_file_id,
             document_type=document_type,
@@ -312,6 +451,14 @@ class MetadataRepository:
         await self._session.commit()
 
     async def get_extracted_document(self, drive_file_id: str) -> ExtractedDocument | None:
+        """Fetch the extracted document record for a given file.
+
+        Args:
+            drive_file_id: Unique source identifier of the file.
+
+        Returns:
+            ExtractedDocument if it exists, or None if not yet extracted.
+        """
         result = await self._session.execute(
             select(ExtractedDocument).where(ExtractedDocument.drive_file_id == drive_file_id)
         )
@@ -413,11 +560,27 @@ class SyncMetadataRepository:
     """Synchronous version of MetadataRepository for Celery tasks."""
 
     def __init__(self, session: Session) -> None:
+        """Initialize the sync repository with a SQLAlchemy Session.
+
+        Args:
+            session: SQLAlchemy synchronous database session.
+        """
         self._session = session
 
     def create_file_record(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> FileRecord:
+        """Create a new file record with 'pending' status and return it.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            name: Display file name.
+            mime_type: MIME type string of the file.
+            drive_modified_at: Last-modified timestamp from the source.
+
+        Returns:
+            The freshly committed and refreshed FileRecord instance.
+        """
         record = FileRecord(
             drive_file_id=drive_file_id,
             name=name,
@@ -431,11 +594,26 @@ class SyncMetadataRepository:
         return record
 
     async def get_file(self, drive_file_id: str) -> FileRecord | None:
+        """Fetch a single file record by its source identifier (sync session, async interface).
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+
+        Returns:
+            FileRecord if found, or None if no matching row exists.
+        """
         return self._session.execute(
             select(FileRecord).where(FileRecord.drive_file_id == drive_file_id)
         ).scalar_one_or_none()
 
     def update_status_sync(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
+        """Update the top-level processing status and optional error message for a file.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            status: New pipeline status value (e.g. 'embedded', 'failed').
+            error_message: Optional error description to store alongside the status.
+        """
         self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -472,9 +650,21 @@ class SyncMetadataRepository:
         self._session.commit()
 
     async def update_status(self, drive_file_id: str, status: str, error_message: str | None = None) -> None:
+        """Async-compatible wrapper that delegates to update_status_sync.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            status: New pipeline status value.
+            error_message: Optional error description.
+        """
         self.update_status_sync(drive_file_id, status, error_message)
 
     def update_last_processed_at(self, drive_file_id: str) -> None:
+        """Stamp the current UTC time as last_processed_at for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+        """
         self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -483,6 +673,14 @@ class SyncMetadataRepository:
         self._session.commit()
 
     def list_by_status(self, status: str | None) -> Sequence[FileRecord]:
+        """Return all file records, optionally filtered to a specific status.
+
+        Args:
+            status: Pipeline status to filter on, or None to return all records.
+
+        Returns:
+            Sequence of FileRecord instances matching the filter.
+        """
         if status is None:
             return self._session.execute(select(FileRecord)).scalars().all()
         return self._session.execute(select(FileRecord).where(FileRecord.status == status)).scalars().all()
@@ -490,6 +688,14 @@ class SyncMetadataRepository:
     async def upsert_file(
         self, drive_file_id: str, name: str, mime_type: str, drive_modified_at: datetime | None = None
     ) -> None:
+        """Insert a new file record or reset it to 'pending' on conflict (sync session, async interface).
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            name: Display file name.
+            mime_type: MIME type string of the file.
+            drive_modified_at: Last-modified timestamp from the source.
+        """
         stmt = _upsert_insert_for_session(self._session, FileRecord).values(
             drive_file_id=drive_file_id,
             name=name,
@@ -521,6 +727,15 @@ class SyncMetadataRepository:
         raw_checksum: str | None = None,
         raw_status: str | None = None,
     ) -> None:
+        """Synchronously patch raw-stage columns, updating only provided fields.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_raw_key: MinIO object key for the raw file, if changed.
+            raw_source_version: Source version string, if changed.
+            raw_checksum: SHA-256 hex digest of the raw file, if changed.
+            raw_status: New raw pipeline status (e.g. 'synced'), if changed.
+        """
         values: dict[str, object] = {}
         if minio_raw_key is not None:
             values["minio_raw_key"] = minio_raw_key
@@ -546,6 +761,16 @@ class SyncMetadataRepository:
         text_status: str | None = None,
         text_error: str | None = None,
     ) -> None:
+        """Synchronously patch text-stage columns, updating only provided fields.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_text_key: MinIO object key for the extracted text, if changed.
+            text_source_checksum: Checksum of the raw file this text was extracted from.
+            text_checksum: Checksum of the extracted text content itself.
+            text_status: New text pipeline status (e.g. 'ready_for_embedding').
+            text_error: Error description to store, or None to clear a previous error.
+        """
         values: dict[str, object] = {}
         if minio_text_key is not None:
             values["minio_text_key"] = minio_text_key
@@ -565,6 +790,11 @@ class SyncMetadataRepository:
             self._session.commit()
 
     def list_ready_for_embedding_sync(self) -> Sequence[FileRecord]:
+        """Return all file records with text_status='ready_for_embedding'.
+
+        Returns:
+            Sequence of FileRecord instances waiting to be embedded.
+        """
         return (
             self._session.execute(
                 select(FileRecord).where(FileRecord.text_status == "ready_for_embedding")
@@ -631,6 +861,11 @@ class SyncMetadataRepository:
         return result.rowcount
 
     def list_vision_pending_sync(self) -> Sequence[FileRecord]:
+        """Return all file records with status='vision_pending'.
+
+        Returns:
+            Sequence of FileRecord instances awaiting vision OCR processing.
+        """
         return (
             self._session.execute(
                 select(FileRecord).where(FileRecord.status == "vision_pending")
@@ -640,12 +875,24 @@ class SyncMetadataRepository:
         )
 
     def update_chunk_count(self, drive_file_id: str, count: int) -> None:
+        """Update the stored chunk count for a file after embedding.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            count: Number of embedded chunks produced from this file.
+        """
         self._session.execute(
             update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(chunk_count=count)
         )
         self._session.commit()
 
     def update_text_key_sync(self, drive_file_id: str, minio_text_key: str) -> None:
+        """Synchronously update the MinIO text object key for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_text_key: New MinIO object key for the extracted text.
+        """
         self._session.execute(
             update(FileRecord)
             .where(FileRecord.drive_file_id == drive_file_id)
@@ -654,12 +901,23 @@ class SyncMetadataRepository:
         self._session.commit()
 
     def update_raw_key_sync(self, drive_file_id: str, minio_raw_key: str) -> None:
+        """Synchronously update the MinIO raw object key for a file record.
+
+        Args:
+            drive_file_id: Unique source identifier for the file.
+            minio_raw_key: New MinIO object key for the raw file.
+        """
         self._session.execute(
             update(FileRecord).where(FileRecord.drive_file_id == drive_file_id).values(minio_raw_key=minio_raw_key)
         )
         self._session.commit()
 
     async def get_page_token(self) -> str:
+        """Retrieve the current sync page token (sync session, async interface).
+
+        Returns:
+            The stored sync token string, or an empty string for the first run.
+        """
         state = self._session.execute(select(SyncState).where(SyncState.key == "drive_page_token")).scalar_one_or_none()
         if not state:
             state = SyncState(key="drive_page_token", value="")
@@ -669,19 +927,35 @@ class SyncMetadataRepository:
         return state.value
 
     async def update_page_token(self, token: str) -> None:
+        """Upsert the sync page token in the sync_state table (sync session, async interface).
+
+        Args:
+            token: New page token returned by the source after a sync cycle.
+        """
         stmt = _upsert_insert_for_session(self._session, SyncState).values(key="drive_page_token", value=token)
         stmt = stmt.on_conflict_do_update(index_elements=["key"], set_={"value": stmt.excluded.value})
         self._session.execute(stmt)
         self._session.commit()
 
     def delete_file_record_sync(self, drive_file_id: str) -> None:
+        """Synchronously delete a single file record from the database.
+
+        Args:
+            drive_file_id: Unique source identifier of the file to delete.
+        """
         self._session.execute(delete(FileRecord).where(FileRecord.drive_file_id == drive_file_id))
         self._session.commit()
 
     async def delete_file_record(self, drive_file_id: str) -> None:
+        """Delete a single file record (sync session, async interface).
+
+        Args:
+            drive_file_id: Unique source identifier of the file to delete.
+        """
         self.delete_file_record_sync(drive_file_id)
 
     def delete_all_file_records_sync(self) -> None:
+        """Synchronously delete all file records from the database."""
         self._session.execute(delete(FileRecord))
         self._session.commit()
 
@@ -697,6 +971,18 @@ class SyncMetadataRepository:
         parties: list[str] | None = None,
         extras: dict[str, Any] | None = None,
     ) -> None:
+        """Synchronously insert or overwrite the extracted document record for a file.
+
+        Args:
+            drive_file_id: Unique source identifier linking this record to a file_records row.
+            document_type: Optional document classification string.
+            issuer: Optional issuer name from the document.
+            issued_at: Optional document issuance date.
+            total_amount: Optional monetary total extracted from the document.
+            currency: Optional ISO-4217 currency code.
+            parties: Optional list of parties named in the document.
+            extras: Optional dict of additional extracted key-value fields.
+        """
         values = dict(
             drive_file_id=drive_file_id,
             document_type=document_type,
@@ -715,12 +1001,25 @@ class SyncMetadataRepository:
         self._session.commit()
 
     def get_extracted_document_sync(self, drive_file_id: str) -> ExtractedDocument | None:
+        """Synchronously fetch the extracted document record for a given file.
+
+        Args:
+            drive_file_id: Unique source identifier of the file.
+
+        Returns:
+            ExtractedDocument if it exists, or None if not yet extracted.
+        """
         return self._session.execute(
             select(ExtractedDocument).where(ExtractedDocument.drive_file_id == drive_file_id)
         ).scalar_one_or_none()
 
 
 async def init_db(database_url: str) -> None:
+    """Create all ORM-defined tables and backfill any missing stage columns.
+
+    Args:
+        database_url: Async-compatible SQLAlchemy database URL.
+    """
     from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(database_url)

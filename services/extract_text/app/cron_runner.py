@@ -10,6 +10,12 @@ logger = structlog.get_logger()
 
 
 def run_forever(cron_expression: str, run_once) -> None:
+    """Run a callable on a cron schedule indefinitely, sleeping between firings.
+
+    Args:
+        cron_expression: Standard cron expression (e.g. '*/5 * * * *').
+        run_once: Zero-argument callable to invoke at each scheduled firing.
+    """
     next_fire = croniter(cron_expression, datetime.now(timezone.utc)).get_next(datetime)
     logger.info("extract_text.scheduler.started", cron=cron_expression, next_fire=next_fire.isoformat())
     while True:

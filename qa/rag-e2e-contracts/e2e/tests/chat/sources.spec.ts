@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 
+/** E2E suite: verifies that source reference cards are rendered after the assistant's done message. */
 test.describe("sources", () => {
   test("renders source cards after done message", async ({ page }) => {
     await page.goto("/");

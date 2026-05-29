@@ -22,6 +22,16 @@ def _build_messages(
     chunks: list[RetrievedChunk],
     history: list[ConversationTurn] | None = None,
 ) -> list[dict[str, str]]:
+    """Assemble the LLM message list from retrieved context and optional conversation history.
+
+    Args:
+        query: The user's current question.
+        chunks: Retrieved document chunks to include as context.
+        history: Optional prior conversation turns for multi-turn coherence.
+
+    Returns:
+        List of message dicts with 'role' and 'content' keys in OpenAI format.
+    """
     context = "\n\n".join(f"[Source: {c.source_name} | Section: {c.section_title}]\n{c.text}" for c in chunks)
     messages: list[dict[str, str]] = [
         {"role": "system", "content": SYSTEM_PROMPT},

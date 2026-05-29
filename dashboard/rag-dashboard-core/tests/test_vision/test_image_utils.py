@@ -28,11 +28,13 @@ def _noisy_png(width: int, height: int) -> bytes:
 
 class TestPrepareImage:
     def test_passthrough_when_under_limit(self):
+        """Verify prepare_image returns bytes unchanged when already under the size limit."""
         original = _solid_png(800, 600)
         result = prepare_image(original, max_mb=8)
         assert result == original
 
     def test_downscale_when_over_limit(self):
+        """Verify prepare_image downscales an oversized image to within the 2048px max dimension."""
         large = _noisy_png(3000, 3000)
         assert len(large) > 1 * 1024 * 1024
         result = prepare_image(large, max_mb=1)
@@ -41,6 +43,7 @@ class TestPrepareImage:
             assert max(img.size) <= 2048
 
     def test_downscale_returns_jpeg_with_smaller_size(self):
+        """Verify the recompressed output is JPEG format and smaller than the original."""
         large = _noisy_png(3000, 3000)
         result = prepare_image(large, max_mb=1)
 
@@ -49,11 +52,13 @@ class TestPrepareImage:
             assert img.format == "JPEG"
 
     def test_invalid_bytes_raises(self):
+        """Verify prepare_image raises ValueError for truly invalid (non-image) byte sequences."""
         # Larger than max_mb so we force the decode path; truly invalid payload.
         garbage = b"not-an-image" * 200_000
         with pytest.raises(ValueError):
             prepare_image(garbage, max_mb=1)
 
     def test_empty_bytes_raises(self):
+        """Verify prepare_image raises ValueError for empty byte input."""
         with pytest.raises(ValueError):
             prepare_image(b"", max_mb=8)

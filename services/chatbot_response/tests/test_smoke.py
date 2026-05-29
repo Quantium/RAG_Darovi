@@ -6,6 +6,7 @@ from app.api import create_app
 
 
 def test_health() -> None:
+    """Smoke test: verify the chatbot service health endpoint responds with HTTP 200."""
     app = create_app()
     with TestClient(app) as client:
         response = client.get("/health")
