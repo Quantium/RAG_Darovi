@@ -22,6 +22,7 @@ jobs:
             # Run schema migrations against Neon (idempotent — safe on every deploy)
             source ~/.profile
             cd schema/rag-schema
+            uv pip install -r requirements.txt -q
             DATABASE_URL=$(grep '^DATABASE_URL_SYNC=' ~/RAG_Darovi/.env.aws | cut -d= -f2-) \
               uv run alembic upgrade head
             cd ~/RAG_Darovi
