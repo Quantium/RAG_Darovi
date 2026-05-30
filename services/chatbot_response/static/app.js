@@ -132,9 +132,13 @@ function renderSources(sources) {
   const rows = sources.map(s => {
     const score = (s.score * 100).toFixed(2) + "%";
     const preview = s.text_preview.replace(/\n/g, " ");
-    const nameCell = s.file_url
-      ? `<a href="${s.file_url}" target="_blank" rel="noopener">${s.source_name}</a>`
-      : s.source_name;
+
+    // Se deja comentado para versiones posteriores donde los archivos estén en línea  
+    // const nameCell = s.file_url
+    //   ? `<a href="${s.file_url}" target="_blank" rel="noopener">${s.source_name}</a>`
+    //   : s.source_name;
+
+    const nameCell = s.source_name;
     return `<tr><td>${nameCell}</td><td>${preview}</td><td>${score}</td></tr>`;
   }).join("");
   sourcesEl.innerHTML = `
