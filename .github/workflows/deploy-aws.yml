@@ -19,13 +19,18 @@ jobs:
             cd ~/RAG_Darovi
             git pull origin main
 
-            # Run schema migrations against Neon (idempotent — safe on every deploy)
-            source ~/.profile
-            cd schema/rag-schema
-            uv pip install -r requirements.txt -q
-            DATABASE_URL=$(grep '^DATABASE_URL_SYNC=' ~/RAG_Darovi/.env.aws | cut -d= -f2-) \
-              uv run alembic upgrade head
-            cd ~/RAG_Darovi
+            # Run schema migrations only when schema/ files changed in this push
+            SCHEMA_CHANGED=$(git diff HEAD~1 HEAD --name-only | grep -c '^schema/' || true)
+            if [ "$SCHEMA_CHANGED" -gt 0 ]; then
+              source ~/.profile
+              cd schema/rag-schema
+              uv pip install -r requirements.txt -q
+              DATABASE_URL=$(grep '^DATABASE_URL_SYNC=' ~/RAG_Darovi/.env.aws | cut -d= -f2-) \
+                uv run alembic upgrade head
+              cd ~/RAG_Darovi
+            else
+              echo "No schema changes detected — skipping migrations"
+            fi
 
             # Rebuild and restart only the application services (redis keeps running)
             docker compose -f docker-compose.aws.yml up -d --build --no-deps \
