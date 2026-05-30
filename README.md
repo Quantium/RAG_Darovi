@@ -224,7 +224,38 @@ Every file moves through these states in `file_records.text_status` and `file_re
 
 ## 5. System Architecture (Technical)
 
-### Container Communication Map
+### Deployment Overview
+
+The system runs in two independent environments that share the same managed cloud services:
+
+```
+  ON-PREMISES (local Docker)                  AWS EC2 — public internet
+  ─────────────────────────────               ──────────────────────────────────────
+  docker-compose.yml                          docker-compose.aws.yml
+
+  Browser → dashboard-api :8000               Internet → nginx :443 (TLS)
+                                                            │
+  Ingestion pipeline:                         chatbot-response-service :8020
+    ingest-raw-service :8030                  retrieval-admin-service  :8010
+    extract-text-service :8031                  (internal, not exposed)
+                                              redis (container)
+  Processing pipeline:
+    dashboard-worker (Celery)
+    dashboard-worker-vision (GPT-4o OCR)      ─────────────────────────────────────
+    dashboard-beat (scheduler)                SHARED MANAGED SERVICES (both envs)
+                                              ─────────────────────────────────────
+  Storage:                                    Neon.tech (PostgreSQL serverless)
+    MinIO :9000/:9001 (local only)              file_records, sync_state,
+    Redis :6379                                 extracted_documents, chat_users
+                                              Zilliz Cloud (managed Milvus)
+                                                rag_documents collection
+                                                HNSW COSINE · dim=3072
+  ─────────────────────────────               External APIs (both envs)
+                                              OpenAI: embeddings + vision OCR
+                                              DeepSeek: chat LLM
+```
+
+### Local Container Communication Map
 
 ```
   ┌──────────────────────────────────────────────────────────────────────────┐
@@ -279,14 +310,15 @@ Every file moves through these states in `file_records.text_status` and `file_re
   ┌──────────────────────────────────────────────────────────────────────────┐
   │  INFRASTRUCTURE LAYER                                                     │
   │                                                                           │
-  │  PostgreSQL 16 :5432              Redis 7 :6379                          │
+  │  Neon.tech PostgreSQL (shared)    Redis 7 :6379 (local container)        │
   │  ┌─────────────────────────┐      ┌─────────────────────────────────┐    │
   │  │ file_records            │      │ DB0: Celery broker (AOF persist)│    │
   │  │ sync_state              │      │ DB1: Celery results             │    │
   │  │ extracted_documents     │      │ DB2: retrieval cache + conv hist│    │
-  │  └─────────────────────────┘      └─────────────────────────────────┘    │
+  │  │ chat_users              │      └─────────────────────────────────┘    │
+  │  └─────────────────────────┘                                             │
   │                                                                           │
-  │  MinIO :9000/:9001                Zilliz Cloud (managed Milvus)          │
+  │  MinIO :9000/:9001 (local only)   Zilliz Cloud (managed Milvus)          │
   │  ┌─────────────────────────┐      ┌─────────────────────────────────┐    │
   │  │ raw-files bucket        │      │ rag_documents collection        │    │
   │  │ converted-texts bucket  │      │ HNSW COSINE · dim=3072          │    │
@@ -355,32 +387,46 @@ Every file moves through these states in `file_records.text_status` and `file_re
 
 ### Services and Responsibilities
 
-| Container | Port | Source | Role |
-|-----------|------|--------|------|
-| `dashboard-api` | `8000` | `dashboard/rag-dashboard-core` | Main entrypoint: FastAPI app, static frontend, Celery dispatcher |
-| `dashboard-worker` | — | `dashboard/rag-dashboard-core` | Celery worker: `download_file`, `embed_file`, `poll_text_ready_for_embedding`, `run_incremental_sync` |
-| `dashboard-worker-vision` | — | `dashboard/rag-dashboard-core` | Dedicated OCR worker: `vision_extract` via GPT-4o (concurrency=1) |
-| `dashboard-beat` | — | `dashboard/rag-dashboard-core` | Celery Beat: fires polling tasks every `EMBEDDING_POLL_INTERVAL_SECONDS` |
-| `ingest-raw-service` | `8030` | `services/ingest_raw` | Watches `LABORATORIOS/`; uploads binaries to MinIO; creates `file_records` |
-| `extract-text-service` | `8031` | `services/extract_text` | Downloads RAW from MinIO; runs pdfplumber/docx/xlsx; quality-checks text; emits vision sentinels; writes to MinIO TEXT |
-| `retrieval-admin-service` | `8010` | `services/retrieval_admin` | REST API only (no UI): embeds queries via OpenAI → Milvus COSINE search → Redis cache |
-| `chatbot-response-service` | `8020` | `services/chatbot_response` | REST + WebSocket chat: loads conversation history from Redis; calls retrieval-admin; calls DeepSeek for LLM completion |
-| `postgres` | `5432` | `postgres:16-alpine` | Relational metadata store |
-| `redis` | `6379` | `redis:7-alpine` | Celery broker (DB 0), results (DB 1), retrieval cache + conversation history (DB 2) |
-| `minio` | `9000/9001` | `minio/minio` | Object storage: `raw-files`, `converted-texts`, `a-bucket` (Milvus internal segments) |
-| `milvus` | `19530` | `milvusdb/milvus:v2.4.21` | **Local dev only — not started in production.** Zilliz Cloud is used instead (set `MILVUS_URI`). |
-| `milvus-etcd` | — | `quay.io/coreos/etcd:v3.5.18` | **Local dev only** — Milvus metadata store, only needed when `milvus` container is running. |
+| Container | Port | Where it runs | Role |
+|-----------|------|---------------|------|
+| `dashboard-api` | `8000` | Local only | Main entrypoint: FastAPI app, static frontend, Celery dispatcher |
+| `dashboard-worker` | — | Local only | Celery worker: `download_file`, `embed_file`, `poll_text_ready_for_embedding`, `run_incremental_sync` |
+| `dashboard-worker-vision` | — | Local only | Dedicated OCR worker: `vision_extract` via GPT-4o (concurrency=1) |
+| `dashboard-beat` | — | Local only | Celery Beat: fires polling tasks every `EMBEDDING_POLL_INTERVAL_SECONDS` |
+| `ingest-raw-service` | `8030` | Local only | Watches `LABORATORIOS/`; uploads binaries to MinIO; creates `file_records` |
+| `extract-text-service` | `8031` | Local only | Downloads RAW from MinIO; runs pdfplumber/docx/xlsx; quality-checks text; emits vision sentinels; writes to MinIO TEXT |
+| `retrieval-admin-service` | `8010` | Local + AWS (internal) | REST API: embeds queries via OpenAI → Milvus COSINE search → Redis cache. On AWS: not exposed to internet. |
+| `chatbot-response-service` | `8020` | Local + AWS | REST + WebSocket chat: loads conversation history from Redis; calls retrieval-admin; calls DeepSeek for LLM completion |
+| `nginx` | `80/443` | AWS only | TLS termination (self-signed cert), HTTP→HTTPS redirect, WebSocket upgrade proxy |
+| `redis` | `6379` | Local + AWS (separate volumes) | Local: Celery broker (DB 0), results (DB 1), cache (DB 2). AWS: cache + conversation history (DB 2) only |
+| `minio` | `9000/9001` | Local only | Object storage: `raw-files`, `converted-texts`, `a-bucket` |
+| `milvus` | `19530` | Never started | Profile `local-milvus` only. Zilliz Cloud is used instead (set `MILVUS_URI`). |
+| `milvus-etcd` | — | Never started | Profile `local-milvus` only — Milvus metadata store. |
 
-### Named Volumes (persistent data — survives `docker compose down`)
+### Managed Services (no containers)
+
+| Service | Provider | Used by |
+|---------|----------|---------|
+| PostgreSQL | Neon.tech (serverless) | Both local and AWS stacks |
+| Vector database | Zilliz Cloud (managed Milvus) | Both local and AWS stacks |
+
+### Named Volumes
+
+**Local (`docker-compose.yml`):**
 
 | Volume | Container | Contains |
 |--------|-----------|---------|
-| `pgdata` | postgres | All database tables and records |
 | `redisdata` | redis | Celery queues (AOF persistence) + conversation cache |
-| `miniodata` | minio | Raw files, extracted texts, Milvus vector segments |
-| `milvusdata` | milvus | Milvus runtime state |
+| `miniodata` | minio | Raw files, extracted texts |
+| `milvusdata` | milvus | Milvus runtime state (unused in production) |
 
-> **Warning:** `docker compose down -v` (the `-v` flag) **deletes all volumes**, including your vectors and files. Use plain `docker compose down` to stop containers without losing data.
+**AWS (`docker-compose.aws.yml`):**
+
+| Volume | Container | Contains |
+|--------|-----------|---------|
+| `redisdata-aws` | redis | Conversation history + retrieval cache |
+
+> **Warning:** `docker compose down -v` (the `-v` flag) **deletes all volumes**. Use plain `docker compose down` to stop containers without losing data.
 
 ---
 
@@ -436,12 +482,21 @@ Copy `.env.example` to `.env` and fill in the required values. The file is gitig
 
 ### PostgreSQL — Relational Metadata
 
-[PostgreSQL 16](https://www.postgresql.org/docs/16/) stores the pipeline state machine for every file. Key table: `file_records`.
+PostgreSQL is hosted on **[Neon.tech](https://neon.tech/)** (serverless, free tier). There is no local PostgreSQL container. Both the local and AWS stacks connect to the same Neon instance via `DATABASE_URL` and `DATABASE_URL_SYNC`.
+
+Key tables: `file_records` (pipeline state machine), `chat_users` (authentication), `sync_state`, `extracted_documents`.
+
+Schema is managed by Alembic in `schema/rag-schema/`. Run migrations:
+```bash
+cd schema/rag-schema
+uv pip install -r requirements.txt
+DATABASE_URL_SYNC="postgresql+psycopg2://..." uv run alembic upgrade head
+```
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `DATABASE_URL` | `postgresql+asyncpg://...` | — | Async connection string for [SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html) (FastAPI). Driver: [asyncpg](https://github.com/MagicStack/asyncpg) |
-| `DATABASE_URL_SYNC` | `postgresql+psycopg2://...` | — | Sync connection string for [Celery](https://docs.celeryq.dev/en/stable/) tasks. Driver: [psycopg2](https://www.psycopg.org/) |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | ✅ | Async connection string for [SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html) (FastAPI). Add `?ssl=require` for Neon. |
+| `DATABASE_URL_SYNC` | `postgresql+psycopg2://...` | ✅ | Sync connection string for [Celery](https://docs.celeryq.dev/en/stable/) tasks and Alembic. Add `?sslmode=require` for Neon. |
 
 ### Redis — Broker, Results, Cache
 
@@ -466,6 +521,25 @@ The vector database stores 3072-dimensional float vectors representing the "mean
 | `MILVUS_PORT` | `19530` | — | gRPC port for local Milvus |
 
 > **Changing `EMBED_DIM` or `EMBED_MODEL`?** You must drop and recreate the collection on Zilliz (use the Re-Vectorize button in the dashboard), then re-run the embedding pipeline. Stored vectors and model dimensions must always match.
+
+#### Similarity Metric
+
+`COSINE` is set in two places and both must always match:
+
+- **Index creation** — `dashboard/rag-dashboard-core/src/vectorizer/milvus_store.py`: defines the HNSW index with `metric_type="COSINE"`.
+- **Search queries** — `services/retrieval_admin/app/retrieval.py:95`: passes `{"metric_type": "COSINE", "params": {"ef": 128}}` at query time.
+
+Milvus requires that the `metric_type` used at search time matches the one used when the index was built. Changing one without the other will cause an error or silently wrong results.
+
+The three supported metrics for dense float vectors are ([full reference](https://milvus.io/docs/metric.md)):
+
+| `metric_type` | Formula | Interpretation | When to use |
+|--------------|---------|----------------|-------------|
+| `"COSINE"` (**current**) | `dot(a,b) / (‖a‖·‖b‖)` | 1.0 = identical, 0 = unrelated, −1 = opposite. Normalized by vector length. | Default for text embeddings. Robust even if vectors are not perfectly normalized. |
+| `"IP"` | `dot(a,b)` | Higher = more similar. Equivalent to COSINE when vectors are L2-normalized (as OpenAI embeddings are). | Slightly faster than COSINE on normalized vectors; results are identical for this project's embeddings. |
+| `"L2"` | `√Σ(aᵢ−bᵢ)²` | Lower = more similar (distance, not similarity). Sensitive to vector magnitude. | Geometric distance tasks; not recommended for text embeddings without explicit normalization. |
+
+> **Switching metrics requires recreating the collection.** Drop the Zilliz collection, update `metric_type` in both files above, and re-run the full embedding pipeline.
 
 ### OCR Tuning (Tesseract Fallback)
 
@@ -668,24 +742,34 @@ Check that `LLM_API_KEY` and `LLM_BASE_URL` are set in `.env`. The service uses 
 ## Standard Relationship Diagram
 
 ```
-  RAG_Darovi  (this repository — all services inlined, submodules dissolved 2026-05)
+  RAG_Darovi  (monorepo — submodules dissolved 2026-05)
   │
-  ├── services/ingest_raw
-  ├── services/extract_text
-  ├── services/retrieval_admin
-  ├── services/chatbot_response
-  ├── dashboard/rag-dashboard-core
-  ├── schema/rag-schema
+  ├── services/ingest_raw           ← LOCAL only
+  ├── services/extract_text         ← LOCAL only
+  ├── services/retrieval_admin      ← LOCAL + AWS (internal)
+  ├── services/chatbot_response     ← LOCAL + AWS (public via nginx)
+  ├── dashboard/rag-dashboard-core  ← LOCAL only
+  ├── schema/rag-schema             ← Alembic migrations → Neon.tech
+  ├── nginx/aws.conf                ← AWS only (TLS proxy)
+  ├── docker-compose.yml            ← Local full stack
+  ├── docker-compose.aws.yml        ← AWS minimal stack
   └── qa/rag-e2e-contracts
 
-  Pipeline flow:
+  Pipeline flow (local):
   ingest_raw ──▶ extract_text ──▶ retrieval_admin ◀──── chatbot_response
                                        ▲
-                                       └────────────────  chatbot_response
-  dashboard/rag-dashboard-core ──▶ schema/rag-schema
+                                  Zilliz Cloud
+  dashboard/rag-dashboard-core ──▶ embed_file task ──▶ Zilliz Cloud
+
+  Chat flow (AWS):
+  internet ──▶ nginx :443 ──▶ chatbot-response :8020
+                                       │
+                               retrieval-admin :8010 (internal)
+                                  │              │
+                              Zilliz Cloud    Neon.tech
 ```
 
-> All service code lives directly in this monorepo (submodules were dissolved in May 2026). Changes to any service are committed directly here.
+> All service code lives directly in this monorepo. Changes to any service are committed here and deployed to AWS automatically via GitHub Actions on every push to `main`.
 
 ---
 

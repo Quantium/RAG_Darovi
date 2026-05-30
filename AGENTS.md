@@ -12,7 +12,23 @@ For Claude Code specifically, the authoritative behavioral contract is `CLAUDE.m
 
 **This platform** solves: convert an unstructured document archive into a semantically-searchable, conversational knowledge base. Core pipeline: ingest binaries → extract text (digital layer or vision OCR) → embed chunks as high-dimensional vectors → store in a vector database → retrieve semantically at query time → generate LLM answers with source citations.
 
-Architecture: [RAG (Retrieval-Augmented Generation)](https://arxiv.org/abs/2005.11401) over a self-hosted document corpus, running entirely in Docker on-premises.
+Architecture: **hybrid** — ingestion and dashboard run on-premises in Docker; the public-facing chatbot runs on AWS EC2. PostgreSQL is hosted on Neon.tech (serverless). Vectors are hosted on Zilliz Cloud (managed Milvus). Both environments share the same managed databases.
+
+```
+ON-PREMISES (local Docker)              AWS EC2 (public internet)
+────────────────────────────            ──────────────────────────────
+docker-compose.yml                      docker-compose.aws.yml
+  Ingestion pipeline                      nginx (TLS, port 443)
+  Dashboard API + Celery                  chatbot-response-service
+  MinIO (object storage)                  retrieval-admin-service
+  Redis (broker + cache)                  Redis (conversation cache)
+                  │                               │
+                  └──────────┬────────────────────┘
+                             │
+               SHARED MANAGED SERVICES
+               Neon.tech (PostgreSQL)
+               Zilliz Cloud (Milvus vectors)
+```
 
 ---
 
@@ -45,7 +61,8 @@ dashboard/
     config/settings.py Pydantic-settings. Single source of truth for all env vars.
 
 schema/
-  rag-schema/          Alembic migrations. Schema changes MUST go through here.
+  rag-schema/          Alembic migrations against Neon.tech. Run locally and automatically
+                       on every EC2 deploy (GitHub Actions). Schema changes MUST go through here.
 
 qa/
   rag-e2e-contracts/   Cross-service HTTP contracts + Playwright browser tests.
@@ -53,7 +70,36 @@ qa/
 scripts/
   backup.sh            Backup: pg_dump + Python minio streaming tar + Milvus parquet export.
   restore.sh           Restore: psql restore + minio put_object + Milvus drop/recreate/insert.
+
+nginx/
+  aws.conf             Nginx reverse proxy config (HTTP→HTTPS redirect, WebSocket upgrade).
+  certs/               Self-signed TLS certs for EC2 (gitignored — generated on server).
+
+docker-compose.yml     Full local stack (dashboard, ingestion, MinIO, Celery, Redis).
+docker-compose.aws.yml Minimal AWS stack: nginx + chatbot-response + retrieval-admin + redis.
+
+.github/workflows/
+  deploy-aws.yml       GitHub Actions: SSH into EC2 → git pull → alembic upgrade → docker compose up.
+                       Secrets: EC2_IP, EC2_SSH_KEY. Triggered on push to main.
 ```
+
+### Service deployment matrix
+
+| Service | Local | AWS EC2 |
+|---------|-------|---------|
+| `dashboard-api` | ✅ :8000 (HTTPS) | ❌ |
+| `dashboard-worker` | ✅ | ❌ |
+| `dashboard-worker-vision` | ✅ | ❌ |
+| `dashboard-beat` | ✅ | ❌ |
+| `ingest-raw-service` | ✅ :8030 | ❌ |
+| `extract-text-service` | ✅ :8031 | ❌ |
+| `retrieval-admin-service` | ✅ :8010 | ✅ (internal, not exposed) |
+| `chatbot-response-service` | ✅ :8020 | ✅ (via nginx :443) |
+| `nginx` | ❌ | ✅ :80/:443 |
+| `redis` | ✅ container | ✅ container (separate volume) |
+| `minio` | ✅ :9000/:9001 | ❌ |
+| `postgres` | ❌ → Neon.tech | ❌ → Neon.tech |
+| `milvus` | ❌ → Zilliz Cloud | ❌ → Zilliz Cloud |
 
 ---
 
