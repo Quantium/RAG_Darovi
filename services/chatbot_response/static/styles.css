@@ -278,6 +278,8 @@ body {
 /* ── Sources table ───────────────────────────────────────────────────────────── */
 #sources {
   flex-shrink: 0;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 #sources table {
