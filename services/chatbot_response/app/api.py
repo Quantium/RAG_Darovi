@@ -11,9 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .auth import (
-    check_ws_session,
     create_session,
     delete_session,
+    get_session_username,
     require_session,
     verify_user,
 )
@@ -36,7 +36,7 @@ def _pg_url(db_url: str) -> str:
     return db_url.replace("postgresql+psycopg2://", "postgresql://")
 
 
-def _save_interaction_sync(db_url: str, conversation_id: str, question: str, answer: str) -> int:
+def _save_interaction_sync(db_url: str, conversation_id: str, question: str, answer: str, username: str) -> int:
     """Persist a chat interaction to the database and return its generated row ID.
 
     Args:
@@ -44,6 +44,7 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
         conversation_id: UUID identifying the ongoing conversation.
         question: The user's query text.
         answer: The assistant's response text.
+        username: The authenticated username of the asker.
 
     Returns:
         The auto-generated primary key of the inserted chat_interactions row.
@@ -52,9 +53,9 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_interactions (conversation_id, question, answer)"
-                " VALUES (%s, %s, %s) RETURNING id",
-                (conversation_id, question, answer),
+                "INSERT INTO chat_interactions (conversation_id, question, answer, username)"
+                " VALUES (%s, %s, %s, %s) RETURNING id",
+                (conversation_id, question, answer, username),
             )
             row_id: int = cur.fetchone()[0]
         conn.commit()
@@ -187,9 +188,9 @@ def create_app() -> FastAPI:
     @app.post(
         "/chat",
         response_model=ChatResponse,
-        dependencies=[Depends(verify_api_key), Depends(require_session)],
+        dependencies=[Depends(verify_api_key)],
     )
-    async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+    async def chat(body: ChatRequest, request: Request, username: str = Depends(require_session)) -> ChatResponse:
         """Handle a single-turn chat request: retrieve context, call LLM, persist interaction.
 
         Args:
@@ -214,7 +215,7 @@ def create_app() -> FastAPI:
         db_url = settings.database_url_sync.get_secret_value()
         loop = asyncio.get_event_loop()
         interaction_id = await loop.run_in_executor(
-            None, partial(_save_interaction_sync, db_url, conv_id, body.query, answer)
+            None, partial(_save_interaction_sync, db_url, conv_id, body.query, answer, username)
         )
         return ChatResponse(answer=answer, sources=retrieve.sources, conversation_id=conv_id, interaction_id=interaction_id)
 
@@ -253,7 +254,8 @@ def create_app() -> FastAPI:
             await ws.close(code=1008)
             return
         token = ws.query_params.get("token")
-        if not check_ws_session(redis_client, token):
+        ws_username = get_session_username(redis_client, token) if token else None
+        if not ws_username:
             await ws.close(code=1008)
             return
         await ws.accept()
@@ -282,7 +284,7 @@ def create_app() -> FastAPI:
                 db_url_ws = settings_ws.database_url_sync.get_secret_value()
                 ws_loop = _aio.get_event_loop()
                 interaction_id = await ws_loop.run_in_executor(
-                    None, partial(_save_interaction_sync, db_url_ws, conv_id, query, answer)
+                    None, partial(_save_interaction_sync, db_url_ws, conv_id, query, answer, ws_username)
                 )
                 await ws.send_json(
                     {

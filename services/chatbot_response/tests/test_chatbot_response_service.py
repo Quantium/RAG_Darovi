@@ -38,6 +38,7 @@ def test_chatbot_response_health_endpoint():
                 answer="ok",
                 sources=[],
                 conversation_id="c1",
+                interaction_id=1,
             )
         )
         llm = llm_cls.return_value

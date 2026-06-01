@@ -909,6 +909,7 @@ async function loadResponses() {
             const ratingIcon = item.rating === "positive" ? "👍" : item.rating === "negative" ? "👎" : "—";
             const tr = document.createElement("tr");
             tr.innerHTML = `
+                <td class="responses-cell">${escapeHtml(item.username || "—")}</td>
                 <td class="responses-cell">${escapeHtml(item.question)}</td>
                 <td class="responses-cell">${escapeHtml(item.answer)}</td>
                 <td class="responses-rating">${ratingIcon}</td>
@@ -919,7 +920,7 @@ async function loadResponses() {
     } catch (err) {
         if (responsesTableBody) {
             const tr = document.createElement("tr");
-            tr.innerHTML = `<td colspan="4">Error al cargar respuestas: ${escapeHtml(err.message || String(err))}</td>`;
+            tr.innerHTML = `<td colspan="5">Error al cargar respuestas: ${escapeHtml(err.message || String(err))}</td>`;
             responsesTableBody.appendChild(tr);
         }
     }

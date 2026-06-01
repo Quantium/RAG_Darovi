@@ -17,12 +17,12 @@ async def list_responses(request: Request) -> list[dict]:
         request: Incoming FastAPI request carrying app state.
 
     Returns:
-        List of dicts with id, conversation_id, question, answer, rating, correction, and created_at.
+        List of dicts with id, conversation_id, question, answer, rating, correction, username, and created_at.
     """
     async with AsyncSession(request.app.state.engine) as session:
         result = await session.execute(
             text(
-                "SELECT id, conversation_id, question, answer, rating, correction,"
+                "SELECT id, conversation_id, question, answer, rating, correction, username,"
                 " created_at AT TIME ZONE 'UTC' AS created_at"
                 " FROM chat_interactions"
                 " ORDER BY created_at DESC"
@@ -38,7 +38,8 @@ async def list_responses(request: Request) -> list[dict]:
             "answer": row[3],
             "rating": row[4],
             "correction": row[5],
-            "created_at": row[6].isoformat() if row[6] else None,
+            "username": row[6],
+            "created_at": row[7].isoformat() if row[7] else None,
         }
         for row in rows
     ]
