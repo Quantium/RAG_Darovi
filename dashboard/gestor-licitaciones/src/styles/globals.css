@@ -1,0 +1,24 @@
+/*
+ * Global resets and cross-browser normalizations.
+ * Loaded once via src/styles/index.css.
+ */
+
+/* Reserve scrollbar space on both sides so Chrome's visible scrollbar
+ * doesn't shift the layout — matches Safari's overlay-scrollbar behavior. */
+html {
+  scrollbar-gutter: stable both-edges;
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+/* Normalize font rendering across Chrome/Safari/Firefox */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}

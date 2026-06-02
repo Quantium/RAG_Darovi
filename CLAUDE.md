@@ -243,6 +243,7 @@ Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatica
 
 | Port | Service |
 |------|---------|
+| 3000 | `gestor-licitaciones` (React/Vite SPA — standalone, not yet wired to backend) |
 | 8000 | `dashboard-api` (HTTPS, main UI) |
 | 8010 | `retrieval-admin-service` (HTTP, REST only, no UI) |
 | 8020 | `chatbot-response-service` (HTTP + WebSocket) |
