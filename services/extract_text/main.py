@@ -6,11 +6,9 @@ import threading
 import uvicorn
 
 from app.cron_runner import run_forever
-from app.db import create_repository
 from app.http_api import app as http_app, configure_http_api
-from app.service import ExtractTextService
 from app.settings import Settings
-from app.storage import MinIOStorage
+from app.tenant_service import TenantExtractService
 
 logger = structlog.get_logger()
 
@@ -22,9 +20,7 @@ def main() -> None:
     optionally runs one extraction pass on startup, and then enters the cron loop.
     """
     settings = Settings()
-    repo = create_repository(settings)
-    storage = MinIOStorage(settings)
-    service = ExtractTextService(settings=settings, repo=repo, storage=storage)
+    service = TenantExtractService(settings)
 
     configure_http_api(service=service, settings=settings)
     if settings.extract_text_http_enabled:

@@ -18,6 +18,8 @@ class ExtractTextService:
         settings: Settings,
         repo: MetadataRepository,
         storage: MinIOStorage,
+        text_key_prefix: str = "",
+        manage_lock: bool = True,
     ) -> None:
         """Initialize the extraction service with its dependencies.
 
@@ -25,10 +27,16 @@ class ExtractTextService:
             settings: Application settings controlling batch size and lock ID.
             repo: Metadata repository for reading candidates and updating statuses.
             storage: MinIO storage client for downloading raw files and uploading texts.
+            text_key_prefix: Per-licitación MinIO key prefix for converted text (e.g. '<slug>/');
+                empty for the legacy single-tenant key space.
+            manage_lock: When False, the caller (TenantExtractService) holds the advisory lock for
+                the whole run, so this instance neither acquires nor releases it.
         """
         self._settings = settings
         self._repo = repo
         self._storage = storage
+        self._text_key_prefix = text_key_prefix
+        self._manage_lock = manage_lock
 
     def run_once(self) -> dict[str, int]:
         """Process one batch of raw files needing text extraction.
@@ -39,7 +47,7 @@ class ExtractTextService:
         Returns:
             Dict with 'scanned', 'updated', and 'failed' counts for the batch.
         """
-        if not self._repo.try_acquire_lock(self._settings.extract_text_lock_id):
+        if self._manage_lock and not self._repo.try_acquire_lock(self._settings.extract_text_lock_id):
             logger.info("extract_text.skipped", reason="another extraction run is active")
             return {"scanned": 0, "updated": 0, "failed": 0}
 
@@ -55,7 +63,7 @@ class ExtractTextService:
                     raw_bytes = self._storage.download_raw(record.minio_raw_key)
                     text = extract_text(raw_bytes, record.mime_type, record.name, self._settings)
                     text_bytes = text.encode("utf-8")
-                    text_key = f"{record.drive_file_id}.md"
+                    text_key = f"{self._text_key_prefix}{record.drive_file_id}.md"
                     self._storage.upload_text(text_key, text_bytes)
                     text_checksum = hashlib.sha256(text_bytes).hexdigest()
                     if has_sentinels(text):
@@ -77,7 +85,8 @@ class ExtractTextService:
                     self._repo.mark_text_failed(record.drive_file_id, str(exc))
                     failed += 1
         finally:
-            self._repo.release_lock(self._settings.extract_text_lock_id)
+            if self._manage_lock:
+                self._repo.release_lock(self._settings.extract_text_lock_id)
 
         logger.info("extract_text.run_once", scanned=scanned, updated=updated, failed=failed)
         return {"scanned": scanned, "updated": updated, "failed": failed}
