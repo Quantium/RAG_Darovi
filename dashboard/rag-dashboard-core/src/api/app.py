@@ -100,6 +100,7 @@ def create_app() -> FastAPI:
         Fully configured FastAPI instance ready to serve requests.
     """
     from src.api.dashboard_routes import dashboard_router
+    from src.api.licitaciones_routes import licitaciones_router
     from src.api.response_routes import response_router
     from src.api.routes import router
     from src.api.user_routes import user_router
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router)
     app.include_router(user_router)
     app.include_router(response_router)
+    app.include_router(licitaciones_router)
 
     # Explicit routes for the SPA assets. Do not use mount("/", StaticFiles(...)) at the
     # application root: in some Starlette/FastAPI setups it shadows API routes such as
