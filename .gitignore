@@ -1,3 +1,8 @@
+# Node
+node_modules/
+dist/
+.pnpm-store/
+
 # Python
 __pycache__/
 *.py[cod]

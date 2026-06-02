@@ -234,11 +234,15 @@ The system runs in two independent environments that share the same managed clou
   docker-compose.yml                          docker-compose.aws.yml
 
   Browser → dashboard-api :8000               Internet → nginx :443 (TLS)
-                                                            │
-  Ingestion pipeline:                         chatbot-response-service :8020
-    ingest-raw-service :8030                  retrieval-admin-service  :8010
-    extract-text-service :8031                  (internal, not exposed)
+  Browser → gestor-licitaciones :3000                     │
+            (React/Vite SPA —                 chatbot-response-service :8020
+             standalone, not yet wired        retrieval-admin-service  :8010
+             to backend)                        (internal, not exposed)
                                               redis (container)
+  Ingestion pipeline:
+    ingest-raw-service :8030
+    extract-text-service :8031
+
   Processing pipeline:
     dashboard-worker (Celery)
     dashboard-worker-vision (GPT-4o OCR)      ─────────────────────────────────────
@@ -389,6 +393,7 @@ The system runs in two independent environments that share the same managed clou
 
 | Container | Port | Where it runs | Role |
 |-----------|------|---------------|------|
+| `gestor-licitaciones` | `3000` | Local only | React + Vite frontend — Gestor de Licitaciones UI (standalone, not yet wired to backend) |
 | `dashboard-api` | `8000` | Local only | Main entrypoint: FastAPI app, static frontend, Celery dispatcher |
 | `dashboard-worker` | — | Local only | Celery worker: `download_file`, `embed_file`, `poll_text_ready_for_embedding`, `run_incremental_sync` |
 | `dashboard-worker-vision` | — | Local only | Dedicated OCR worker: `vision_extract` via GPT-4o (concurrency=1) |
@@ -655,6 +660,7 @@ docker compose ps                          # all containers healthy
 curl -k https://localhost:8000/status      # {"total_files":N, "embedded":M, ...}
 curl http://localhost:8010/health          # {"status":"ok"}
 curl http://localhost:8020/health          # {"status":"ok"}
+curl http://localhost:3000                 # gestor-licitaciones UI (HTML)
 ./scripts/verify-multi-repo-local.sh       # full integration check
 ```
 
@@ -744,15 +750,16 @@ Check that `LLM_API_KEY` and `LLM_BASE_URL` are set in `.env`. The service uses 
 ```
   RAG_Darovi  (monorepo — submodules dissolved 2026-05)
   │
-  ├── services/ingest_raw           ← LOCAL only
-  ├── services/extract_text         ← LOCAL only
-  ├── services/retrieval_admin      ← LOCAL + AWS (internal)
-  ├── services/chatbot_response     ← LOCAL + AWS (public via nginx)
-  ├── dashboard/rag-dashboard-core  ← LOCAL only
-  ├── schema/rag-schema             ← Alembic migrations → Neon.tech
-  ├── nginx/aws.conf                ← AWS only (TLS proxy)
-  ├── docker-compose.yml            ← Local full stack
-  ├── docker-compose.aws.yml        ← AWS minimal stack
+  ├── services/ingest_raw              ← LOCAL only
+  ├── services/extract_text            ← LOCAL only
+  ├── services/retrieval_admin         ← LOCAL + AWS (internal)
+  ├── services/chatbot_response        ← LOCAL + AWS (public via nginx)
+  ├── dashboard/rag-dashboard-core     ← LOCAL only
+  ├── dashboard/gestor-licitaciones    ← LOCAL only (React/Vite SPA :3000)
+  ├── schema/rag-schema                ← Alembic migrations → Neon.tech
+  ├── nginx/aws.conf                   ← AWS only (TLS proxy)
+  ├── docker-compose.yml               ← Local full stack
+  ├── docker-compose.aws.yml           ← AWS minimal stack
   └── qa/rag-e2e-contracts
 
   Pipeline flow (local):

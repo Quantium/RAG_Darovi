@@ -211,6 +211,18 @@ services:
       redis:
         condition: service_healthy
 
+  gestor-licitaciones:
+    build:
+      context: ./dashboard/gestor-licitaciones
+      target: dev          # swap to "prod" for a static nginx build
+    ports:
+      - "3000:3000"
+    volumes:
+      # Hot-module-reload: mount source so edits reflect immediately without rebuilding
+      - ./dashboard/gestor-licitaciones/src:/app/src:ro
+    # No backend dependencies yet — this service is standalone until API integration
+    restart: unless-stopped
+
   dashboard-qa:
     profiles: ["qa"]
     build:
