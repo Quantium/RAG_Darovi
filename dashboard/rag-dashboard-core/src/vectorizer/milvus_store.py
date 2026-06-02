@@ -28,14 +28,17 @@ class VectorStore(Protocol):
 
 
 class MilvusStore:
-    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+    def __init__(self, settings: Settings, client: Any | None = None, collection_name: str | None = None) -> None:
         """Initialize the Milvus store, connecting to the configured host and port.
 
         Args:
             settings: Application settings providing collection name, embedding dim, and host/port.
             client: Optional mock client injected during tests (skips live Milvus connection).
+            collection_name: Optional per-licitación collection override. Defaults to
+                settings.milvus_collection (the global 'rag_documents' collection), so existing
+                callers are unchanged.
         """
-        self._collection_name = settings.milvus_collection
+        self._collection_name = collection_name or settings.milvus_collection
         self._dim = settings.embed_dim
         self._host = settings.milvus_host
         self._port = settings.milvus_port

@@ -128,6 +128,107 @@ class ExtractedDocument(Base):
     )
 
 
+# --- Multi-tenancy: licitaciones registry (global, lives in the public schema) ---
+
+LICITACION_STATUS_PROVISIONING = "provisioning"
+LICITACION_STATUS_ACTIVE = "active"
+LICITACION_STATUS_PAUSED = "paused"
+LICITACION_STATUS_ARCHIVED = "archived"
+LICITACION_STATUS_FAILED = "failed"
+
+
+class Licitacion(Base):
+    """One row per licitación (tender). Global registry kept in the public schema.
+
+    Maps a human-facing licitación to its isolated storage: a PostgreSQL schema
+    (``schema_name``) holding file_records/extracted_documents/sync_state/
+    chat_interactions, a Milvus collection (``milvus_collection``), a MinIO key
+    prefix and Redis key namespace (both = ``slug``), and an ingestion source
+    folder relative to LOCAL_SOURCE_FOLDER (``source_path``).
+
+    Physical identifiers (slug, schema_name, milvus_collection) are frozen after
+    creation; only name, source_path and status change. Archiving sets status to
+    'archived' and never drops the schema or collection (manual human deletion).
+    """
+
+    __tablename__ = "licitaciones"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    source_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    schema_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    milvus_collection: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=LICITACION_STATUS_ACTIVE)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=True
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=True
+    )
+
+
+class LicitacionRepository:
+    """Async reads for the global licitaciones registry (public schema).
+
+    Writes (provisioning, edit, pause, archive) are added in Stage 2.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_all(self, include_archived: bool = False) -> Sequence[Licitacion]:
+        """Return licitaciones ordered by name; excludes archived unless requested."""
+        stmt = select(Licitacion)
+        if not include_archived:
+            stmt = stmt.where(Licitacion.status != LICITACION_STATUS_ARCHIVED)
+        result = await self._session.execute(stmt.order_by(Licitacion.name))
+        return result.scalars().all()
+
+    async def list_active(self) -> Sequence[Licitacion]:
+        """Return only active (non-paused, non-archived) licitaciones, ordered by name."""
+        result = await self._session.execute(
+            select(Licitacion)
+            .where(Licitacion.status == LICITACION_STATUS_ACTIVE)
+            .order_by(Licitacion.name)
+        )
+        return result.scalars().all()
+
+    async def get_by_slug(self, slug: str) -> Licitacion | None:
+        """Return the licitación with the given slug, or None."""
+        result = await self._session.execute(select(Licitacion).where(Licitacion.slug == slug))
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, licitacion_id: str) -> Licitacion | None:
+        """Return the licitación with the given id, or None."""
+        return await self._session.get(Licitacion, licitacion_id)
+
+
+class SyncLicitacionReader:
+    """Sync reads for the licitaciones registry, used by Celery tasks and services."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def list_active(self) -> Sequence[Licitacion]:
+        """Return only active licitaciones, ordered by name."""
+        return (
+            self._session.execute(
+                select(Licitacion)
+                .where(Licitacion.status == LICITACION_STATUS_ACTIVE)
+                .order_by(Licitacion.name)
+            )
+            .scalars()
+            .all()
+        )
+
+    def get_by_slug(self, slug: str) -> Licitacion | None:
+        """Return the licitación with the given slug, or None."""
+        return self._session.execute(
+            select(Licitacion).where(Licitacion.slug == slug)
+        ).scalar_one_or_none()
+
+
 class MetadataRepository:
     def __init__(self, session: AsyncSession) -> None:
         """Initialize the async repository with an AsyncSession.
@@ -1026,6 +1127,7 @@ async def init_db(database_url: str) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_file_record_stage_columns)
+        await conn.run_sync(_ensure_default_licitacion)
     await engine.dispose()
 
 
@@ -1052,3 +1154,37 @@ def _ensure_file_record_stage_columns(conn) -> None:
         if column_name in existing:
             continue
         conn.execute(text(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_default_licitacion(conn) -> None:
+    """Idempotently seed the 'Laboratorios Calidad' licitación for the pre-existing single-tenant
+    corpus (public schema + rag_documents collection).
+
+    init_db's create_all builds the licitaciones table but cannot seed it, so the default row is
+    inserted here when absent. Safe to run on every startup and alongside the Alembic 0006 seed.
+    """
+    inspector = inspect(conn)
+    if "licitaciones" not in inspector.get_table_names():
+        return
+    exists = conn.execute(
+        text("SELECT 1 FROM licitaciones WHERE slug = :slug"),
+        {"slug": "laboratorios_calidad"},
+    ).first()
+    if exists:
+        return
+    conn.execute(
+        text(
+            "INSERT INTO licitaciones "
+            "(id, name, slug, source_path, schema_name, milvus_collection, status) "
+            "VALUES (:id, :name, :slug, :source_path, :schema_name, :milvus_collection, :status)"
+        ),
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "Laboratorios Calidad",
+            "slug": "laboratorios_calidad",
+            "source_path": "",
+            "schema_name": "public",
+            "milvus_collection": "rag_documents",
+            "status": "active",
+        },
+    )

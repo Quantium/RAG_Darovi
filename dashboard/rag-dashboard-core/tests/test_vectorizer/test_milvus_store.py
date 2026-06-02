@@ -55,3 +55,21 @@ class TestMilvusStore:
         mock_milvus_client.has_collection.return_value = True
         store.drop_collection_if_exists()
         mock_milvus_client.drop_collection.assert_called_once()
+
+
+class TestMilvusStoreCollectionOverride:
+    """Per-licitación collection override (multi-tenancy Stage 1)."""
+
+    def test_defaults_to_settings_collection(self, settings, mock_milvus_client):
+        """Without an override, the store targets settings.milvus_collection."""
+        mock_milvus_client.has_collection.return_value = True
+        store = MilvusStore(settings, client=mock_milvus_client)
+        store.collection_exists()
+        mock_milvus_client.has_collection.assert_called_with(settings.milvus_collection)
+
+    def test_collection_name_override(self, settings, mock_milvus_client):
+        """An explicit collection_name overrides settings for per-licitación isolation."""
+        mock_milvus_client.has_collection.return_value = False
+        store = MilvusStore(settings, client=mock_milvus_client, collection_name="rag_obra_norte")
+        store.collection_exists()
+        mock_milvus_client.has_collection.assert_called_with("rag_obra_norte")
