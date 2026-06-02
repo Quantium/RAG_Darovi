@@ -25,13 +25,27 @@ class SourceAdapter(Protocol):
 
 
 class LocalSourceAdapter:
-    def __init__(self, settings: Settings) -> None:
-        """Initialize the adapter with the local source folder path from settings.
+    def __init__(
+        self,
+        settings: Settings,
+        sub_path: str = "",
+        exclude_prefixes: frozenset[str] | set[str] = frozenset(),
+    ) -> None:
+        """Initialize the adapter rooted at the licitación's source subfolder.
 
         Args:
-            settings: Application settings providing the local_source_folder path.
+            settings: Application settings providing the local_source_folder base path.
+            sub_path: Licitación source_path relative to local_source_folder ('' = base root).
+            exclude_prefixes: Relative paths owned by other licitaciones to skip — keeps a
+                root-scoped tenant (e.g. the public one) from also ingesting their subfolders.
         """
-        self._root = Path(settings.local_source_folder)
+        base = Path(settings.local_source_folder)
+        self._root = base / sub_path if sub_path else base
+        self._exclude_prefixes = tuple(exclude_prefixes)
+
+    def _is_excluded(self, rel: str) -> bool:
+        """Return True if rel falls under a subfolder owned by another licitación."""
+        return any(rel == ex or rel.startswith(f"{ex}/") for ex in self._exclude_prefixes)
 
     def iter_pages(self, page_size: int) -> Iterator[list[SourceFile]]:
         """Yield pages of SourceFile descriptors discovered recursively under the root folder.
@@ -49,6 +63,8 @@ class LocalSourceAdapter:
             if not path.is_file():
                 continue
             rel = str(path.relative_to(self._root))
+            if self._is_excluded(rel):
+                continue
             stat = path.stat()
             file_id = hashlib.sha1(rel.encode("utf-8")).hexdigest()
             mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"

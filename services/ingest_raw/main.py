@@ -6,12 +6,9 @@ import threading
 import uvicorn
 
 from app.cron_runner import run_forever
-from app.db import create_repository
 from app.http_api import app as http_app, configure_http_api
-from app.service import IngestRawService
 from app.settings import Settings
-from app.sources import build_source_adapter
-from app.storage import MinIOStorage
+from app.tenant_service import TenantIngestService
 
 logger = structlog.get_logger()
 
@@ -23,10 +20,7 @@ def main() -> None:
     optionally runs one ingestion pass on startup, and then enters the cron loop.
     """
     settings = Settings()
-    repo = create_repository(settings)
-    source = build_source_adapter(settings)
-    storage = MinIOStorage(settings)
-    service = IngestRawService(settings=settings, repo=repo, source=source, storage=storage)
+    service = TenantIngestService(settings)
 
     configure_http_api(service=service, settings=settings)
     if settings.ingest_raw_http_enabled:

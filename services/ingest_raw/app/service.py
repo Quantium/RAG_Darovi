@@ -20,6 +20,7 @@ class IngestRawService:
         repo: MetadataRepository,
         source: SourceAdapter,
         storage: MinIOStorage,
+        key_prefix: str = "",
     ) -> None:
         """Initialize the ingestion service with its dependencies.
 
@@ -28,11 +29,14 @@ class IngestRawService:
             repo: Metadata repository for upserting and updating file records.
             source: Source adapter that provides file listings and downloads.
             storage: MinIO storage client for uploading raw files.
+            key_prefix: Per-licitación MinIO key prefix (e.g. '<slug>/'); empty for the
+                legacy single-tenant key space.
         """
         self._settings = settings
         self._repo = repo
         self._source = source
         self._storage = storage
+        self._key_prefix = key_prefix
 
     def run_once(self) -> dict[str, int]:
         """Scan the source for changed files and upload any new or updated ones to MinIO.
@@ -56,7 +60,7 @@ class IngestRawService:
                     continue
                 content = self._source.download_file(source_file)
                 checksum = hashlib.sha256(content).hexdigest()
-                raw_key = f"{source_file.file_id}/{source_file.name}"
+                raw_key = f"{self._key_prefix}{source_file.file_id}/{source_file.name}"
                 self._repo.upsert_file(
                     drive_file_id=source_file.file_id,
                     name=source_file.name,
