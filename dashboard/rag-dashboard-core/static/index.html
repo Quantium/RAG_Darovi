@@ -18,6 +18,10 @@
                 </div>
             </div>
             <div class="header-actions">
+                <label class="licitacion-picker">
+                    <span class="licitacion-picker__label">Licitación</span>
+                    <select id="licitacion-select" aria-label="Licitación seleccionada"></select>
+                </label>
                 <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
             </div>
         </header>
@@ -28,6 +32,7 @@
             <button id="tab-raw-data" class="view-tab" type="button">RAW Data</button>
             <button id="tab-users" class="view-tab" type="button">Usuarios</button>
             <button id="tab-responses" class="view-tab" type="button">Respuestas</button>
+            <button id="tab-licitaciones" class="view-tab" type="button">Licitaciones</button>
         </nav>
 
         <section id="dashboard-panel" class="dashboard-panel main-layout">
@@ -257,6 +262,50 @@
                         </tr>
                     </thead>
                     <tbody id="responses-table-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="licitaciones-panel" class="document-status-panel" hidden>
+            <div class="document-status-header">
+                <h2>Gestor de licitaciones</h2>
+                <button id="refresh-licitaciones-btn" type="button">Actualizar</button>
+            </div>
+            <div class="users-create-form">
+                <h3>Crear licitación</h3>
+                <div class="users-create-fields">
+                    <input
+                        id="new-licitacion-name"
+                        type="text"
+                        placeholder="Nombre de la licitación"
+                        maxlength="255"
+                        autocomplete="off"
+                    />
+                    <input
+                        id="new-licitacion-source"
+                        type="text"
+                        placeholder="Carpeta origen (relativa, opcional)"
+                        maxlength="1024"
+                        autocomplete="off"
+                    />
+                    <button id="create-licitacion-btn" type="button">Crear</button>
+                </div>
+                <p id="licitaciones-create-error" class="users-msg users-error" hidden></p>
+                <p id="licitaciones-create-ok" class="users-msg users-ok" hidden></p>
+            </div>
+            <p id="licitaciones-empty" class="document-status-empty" hidden>No hay licitaciones aún.</p>
+            <div class="document-status-table-wrapper">
+                <table id="licitaciones-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Nombre</th>
+                            <th scope="col">Slug</th>
+                            <th scope="col">Origen</th>
+                            <th scope="col">Estado</th>
+                            <th scope="col">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="licitaciones-table-body"></tbody>
                 </table>
             </div>
         </section>

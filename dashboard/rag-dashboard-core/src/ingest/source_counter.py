@@ -35,8 +35,15 @@ class SourceCounter:
         """
         self._settings = settings
 
-    def count(self) -> tuple[int | None, str]:
-        """Return (file_count_or_none, human-readable source URL)."""
+    def count(self, sub_path: str = "") -> tuple[int | None, str]:
+        """Return (file_count_or_none, human-readable source URL).
+
+        Args:
+            sub_path: Licitación source subfolder (relative to local_source_folder) to count;
+                empty counts the whole source root (the legacy single-tenant behavior).
+        """
         root = Path(self._settings.local_source_folder or "").expanduser()
+        if sub_path:
+            root = root / sub_path
         url = root.as_uri() if root.exists() else f"file://{quote(str(root))}"
         return _count_local_files(root), url

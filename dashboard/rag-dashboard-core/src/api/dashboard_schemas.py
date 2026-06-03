@@ -50,6 +50,7 @@ class DashboardState(BaseModel):
 
     cards: DashboardCardCounts
     source_url: str = ""
+    selected_licitacion: str | None = None
     ingest_processing: bool = False
     transform_processing: bool = False
     vectorize_processing: bool = False

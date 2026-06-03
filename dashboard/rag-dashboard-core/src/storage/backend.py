@@ -101,16 +101,17 @@ class MinIOStorage:
             if not self._client.bucket_exists(bucket):
                 self._client.make_bucket(bucket)
 
-    def count_objects(self, bucket: str) -> int:
-        """Count all objects in a MinIO bucket.
+    def count_objects(self, bucket: str, prefix: str = "") -> int:
+        """Count objects in a MinIO bucket, optionally restricted to a key prefix.
 
         Args:
             bucket: MinIO bucket name to count.
+            prefix: Key prefix (e.g. a licitación's ``<slug>/``); empty counts the whole bucket.
 
         Returns:
-            Total number of objects in the bucket.
+            Number of objects under the prefix.
         """
-        return sum(1 for _ in self._client.list_objects(bucket, recursive=True))
+        return sum(1 for _ in self._client.list_objects(bucket, prefix=prefix or None, recursive=True))
 
     def remove_all_objects(self, bucket: str) -> int:
         """Delete every object in a MinIO bucket and return the count removed.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
@@ -15,9 +16,10 @@ from src.api.app import verify_api_key
 from src.api.dashboard_schemas import DashboardActionResult, DashboardCardCounts, DashboardState, InFlightFile
 from src.dashboard.processing_probe import ProcessingProbe
 from src.ingest.source_counter import SourceCounter
-from src.metadata.repository import MetadataRepository
+from src.metadata.repository import LICITACION_STATUS_ACTIVE, LicitacionRepository, MetadataRepository
 from src.rag.conversation import count_active_chat_sessions
 from src.storage.backend import MinIOStorage
+from src.tenant import tenant_session
 
 logger = structlog.get_logger()
 
@@ -43,31 +45,106 @@ def _require_dashboard_confirm(request: Request) -> None:
         )
 
 
+@dataclass(frozen=True)
+class DashboardTenant:
+    """Resolved licitación scope for a dashboard snapshot."""
+
+    slug: str
+    schema_name: str
+    collection: str
+    source_path: str
+
+    @property
+    def key_prefix(self) -> str:
+        """MinIO key prefix: empty for the public tenant, '<slug>/' otherwise."""
+        return "" if self.schema_name == "public" else f"{self.slug}/"
+
+
+def _tenant_from_row(row) -> DashboardTenant:
+    return DashboardTenant(
+        slug=row.slug,
+        schema_name=row.schema_name,
+        collection=row.milvus_collection,
+        source_path=row.source_path or "",
+    )
+
+
+async def _resolve_dashboard_tenant(request: Request, slug: str | None) -> DashboardTenant:
+    """Resolve the licitación a dashboard snapshot is scoped to.
+
+    With a slug, returns that licitación if it is not archived (admins may inspect a paused
+    one); 404 otherwise. Without a slug, returns the first active licitación, falling back to
+    the first non-archived one, or — if the registry is empty — a legacy public default
+    (public schema, global collection, whole source root). Archived licitaciones are never
+    selectable.
+
+    Raises:
+        HTTPException: 404 when an explicit slug matches no selectable licitación.
+    """
+    settings: Settings = request.app.state.settings
+    async with AsyncSession(request.app.state.engine) as session:
+        rows = await LicitacionRepository(session).list_all(include_archived=False)
+    if slug:
+        for row in rows:
+            if row.slug == slug:
+                return _tenant_from_row(row)
+        raise HTTPException(status_code=404, detail="unknown or inactive licitación")
+    if rows:
+        active = [r for r in rows if r.status == LICITACION_STATUS_ACTIVE]
+        return _tenant_from_row(active[0] if active else rows[0])
+    return DashboardTenant(slug="", schema_name="public", collection=settings.milvus_collection, source_path="")
+
+
+async def _scoped_pg_counts(engine, schema_name: str, probe: ProcessingProbe):
+    """Gather the PostgreSQL-side dashboard aggregates inside the licitación schema."""
+    async with tenant_session(engine, schema_name) as session:
+        repo = MetadataRepository(session)
+        pg = await repo.get_dashboard_counts()
+        inflight = await repo.get_inflight_files()
+        extract_lock = await probe.advisory_extract_lock_held(session)
+        recent_raw = await probe.max_raw_synced_recent(session)
+    return pg, inflight, extract_lock, recent_raw
+
+
+def _count_vectors(request: Request, collection: str) -> int:
+    """Count Milvus entities for a licitación collection, reusing app state for the default one."""
+    settings: Settings = request.app.state.settings
+    if collection == settings.milvus_collection:
+        return request.app.state.vector_store.count_entities()
+    from src.vectorizer.milvus_store import MilvusStore
+
+    return MilvusStore(settings, collection_name=collection).count_entities()
+
+
 @dashboard_router.get(
     "/dashboard/state",
     response_model=DashboardState,
     dependencies=[Depends(verify_api_key)],
 )
-async def dashboard_state(request: Request) -> DashboardState:
-    """Build and return the full dashboard state snapshot including pipeline metrics.
+async def dashboard_state(request: Request, licitacion: str | None = None) -> DashboardState:
+    """Build and return the full dashboard state snapshot for one licitación.
 
-    Aggregates counts from PostgreSQL, MinIO, Milvus, Redis, Celery, and the source adapter.
+    Aggregates counts from PostgreSQL, MinIO, Milvus, Redis, Celery, and the source adapter,
+    all scoped to the selected licitación (its schema, collection, MinIO prefix, and source
+    subfolder). Defaults to the first active licitación when ``licitacion`` is omitted.
 
     Args:
         request: Incoming FastAPI request carrying app state.
+        licitacion: Optional licitación slug to scope the snapshot to.
 
     Returns:
         DashboardState with card counts, processing flags, pause state, and in-flight files.
     """
     settings: Settings = request.app.state.settings
+    tenant = await _resolve_dashboard_tenant(request, licitacion)
     storage = MinIOStorage(settings)
     raw_bucket = settings.minio_bucket_raw
     text_bucket = settings.minio_bucket_text
 
-    minio_raw_total = storage.count_objects(raw_bucket)
-    minio_text_total = storage.count_objects(text_bucket)
+    minio_raw_total = storage.count_objects(raw_bucket, prefix=tenant.key_prefix)
+    minio_text_total = storage.count_objects(text_bucket, prefix=tenant.key_prefix)
 
-    source_total, source_url = SourceCounter(settings).count()
+    source_total, source_url = SourceCounter(settings).count(sub_path=tenant.source_path)
 
     redis_client = request.app.state.redis_cache
     sessions_legacy, sessions_chatbot = count_active_chat_sessions(redis_client)
@@ -75,14 +152,11 @@ async def dashboard_state(request: Request) -> DashboardState:
     probe = ProcessingProbe(settings)
     celery_ingest, celery_vector, active_embed_args = probe.celery_flags()
 
-    async with AsyncSession(request.app.state.engine) as session:
-        repo = MetadataRepository(session)
-        pg = await repo.get_dashboard_counts()
-        inflight = await repo.get_inflight_files()
-        extract_lock = await probe.advisory_extract_lock_held(session)
-        recent_raw = await probe.max_raw_synced_recent(session)
+    pg, inflight, extract_lock, recent_raw = await _scoped_pg_counts(
+        request.app.state.engine, tenant.schema_name, probe
+    )
 
-    milvus_vectors = request.app.state.vector_store.count_entities()
+    milvus_vectors = _count_vectors(request, tenant.collection)
 
     postgres_total = pg["postgres_total"]
     source_n = source_total if source_total is not None else postgres_total
@@ -156,6 +230,7 @@ async def dashboard_state(request: Request) -> DashboardState:
     return DashboardState(
         cards=cards,
         source_url=source_url,
+        selected_licitacion=tenant.slug or None,
         ingest_processing=ingest_processing,
         transform_processing=transform_processing,
         vectorize_processing=vectorize_processing,

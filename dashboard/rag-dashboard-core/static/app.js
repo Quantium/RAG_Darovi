@@ -2,6 +2,8 @@ const state = {
     apiKey: localStorage.getItem("rag_api_key") || "",
     theme: localStorage.getItem("rag_theme") || "dark",
     activeTab: "dashboard",
+    selectedLicitacion: localStorage.getItem("rag_licitacion") || "",
+    licitaciones: [],
     documentStatusFilter: "all",
     documentStatusFiles: [],
     documentStatusPageSize: 25,
@@ -703,10 +705,20 @@ async function loadDashboard() {
     const srcLink = document.getElementById("dash-source-url");
     const updated = document.getElementById("dashboard-updated");
     try {
-        const res = await fetch("/dashboard/state", { headers: apiHeaders() });
+        const url = state.selectedLicitacion
+            ? `/dashboard/state?licitacion=${encodeURIComponent(state.selectedLicitacion)}`
+            : "/dashboard/state";
+        const res = await fetch(url, { headers: apiHeaders() });
         if (!res.ok) throw new Error(`dashboard ${res.status}`);
         const data = await res.json();
         const c = data.cards || {};
+
+        // Reflect the server's chosen licitación when none was explicitly selected.
+        if (!state.selectedLicitacion && data.selected_licitacion) {
+            state.selectedLicitacion = data.selected_licitacion;
+            const sel = document.getElementById("licitacion-select");
+            if (sel) sel.value = data.selected_licitacion;
+        }
 
         const folderLabel = c.source_total == null ? "—" : c.source_total;
         const notIngestedYet = c.source_total == null
@@ -940,16 +952,22 @@ function setActiveTab(nextTab) {
     const rawDataIsActive = nextTab === "raw-data";
     const usersIsActive = nextTab === "users";
     const responsesIsActive = nextTab === "responses";
+    const licitacionesIsActive = nextTab === "licitaciones";
     tabDashboard?.classList.toggle("active", dashboardIsActive);
     tabDocumentStatus?.classList.toggle("active", statusIsActive);
     tabRawData?.classList.toggle("active", rawDataIsActive);
     tabUsers?.classList.toggle("active", usersIsActive);
     tabResponses?.classList.toggle("active", responsesIsActive);
+    tabLicitaciones?.classList.toggle("active", licitacionesIsActive);
     if (dashboardPanel) dashboardPanel.hidden = !dashboardIsActive;
     if (documentStatusPanel) documentStatusPanel.hidden = !statusIsActive;
     if (rawDataPanel) rawDataPanel.hidden = !rawDataIsActive;
     if (usersPanel) usersPanel.hidden = !usersIsActive;
     if (responsesPanel) responsesPanel.hidden = !responsesIsActive;
+    if (licitacionesPanel) licitacionesPanel.hidden = !licitacionesIsActive;
+    if (licitacionesIsActive) {
+        loadLicitacionesTable().catch((e) => console.error("licitaciones", e));
+    }
     if (statusIsActive) {
         loadDocumentStatus().catch((e) => console.error("document status", e));
     }
@@ -1221,12 +1239,191 @@ async function pollStatus() {
     }
 }
 
+// ============================================================================
+// Licitaciones (multi-tenancy): header selector + management panel
+// ============================================================================
+const licitacionSelect = document.getElementById("licitacion-select");
+const tabLicitaciones = document.getElementById("tab-licitaciones");
+const licitacionesPanel = document.getElementById("licitaciones-panel");
+const licitacionesTableBody = document.getElementById("licitaciones-table-body");
+const licitacionesEmpty = document.getElementById("licitaciones-empty");
+const refreshLicitacionesBtn = document.getElementById("refresh-licitaciones-btn");
+const createLicitacionBtn = document.getElementById("create-licitacion-btn");
+const newLicitacionNameEl = document.getElementById("new-licitacion-name");
+const newLicitacionSourceEl = document.getElementById("new-licitacion-source");
+const licitacionesCreateError = document.getElementById("licitaciones-create-error");
+const licitacionesCreateOk = document.getElementById("licitaciones-create-ok");
+
+/**
+ * Fetch non-archived licitaciones and populate the header selector, keeping
+ * state.selectedLicitacion consistent with the available options.
+ */
+async function loadLicitacionSelector() {
+    try {
+        const res = await fetch("/licitaciones", { headers: apiHeaders() });
+        if (!res.ok) throw new Error(`licitaciones ${res.status}`);
+        const rows = await res.json();
+        state.licitaciones = rows;
+        if (!licitacionSelect) return;
+        const slugs = rows.map((r) => r.slug);
+        if (state.selectedLicitacion && !slugs.includes(state.selectedLicitacion)) {
+            state.selectedLicitacion = "";
+        }
+        licitacionSelect.innerHTML = rows
+            .map((r) => `<option value="${escapeHtml(r.slug)}">${escapeHtml(r.name)}</option>`)
+            .join("");
+        if (!state.selectedLicitacion && rows.length) {
+            state.selectedLicitacion = rows[0].slug;
+        }
+        licitacionSelect.value = state.selectedLicitacion;
+    } catch (err) {
+        console.error("licitacion selector", err);
+    }
+}
+
+licitacionSelect?.addEventListener("change", () => {
+    state.selectedLicitacion = licitacionSelect.value;
+    localStorage.setItem("rag_licitacion", state.selectedLicitacion);
+    if (state.activeTab === "dashboard") {
+        loadDashboard().catch((e) => console.error("dashboard", e));
+    }
+});
+
+/**
+ * Render the licitaciones management table with per-row actions.
+ */
+async function loadLicitacionesTable() {
+    if (!licitacionesTableBody) return;
+    licitacionesTableBody.innerHTML = "";
+    if (licitacionesEmpty) licitacionesEmpty.hidden = true;
+    let rows = [];
+    try {
+        const res = await fetch("/licitaciones", { headers: apiHeaders() });
+        if (!res.ok) throw new Error(`licitaciones ${res.status}`);
+        rows = await res.json();
+    } catch (err) {
+        console.error("licitaciones table", err);
+        return;
+    }
+    state.licitaciones = rows;
+    if (!rows.length) {
+        if (licitacionesEmpty) licitacionesEmpty.hidden = false;
+        return;
+    }
+    rows.forEach((lic) => {
+        const tr = document.createElement("tr");
+        const isActive = lic.status === "active";
+        const isPaused = lic.status === "paused";
+        const toggleBtn = isPaused
+            ? `<button type="button" data-action="resume" data-id="${escapeHtml(lic.id)}">Reanudar</button>`
+            : `<button type="button" data-action="pause" data-id="${escapeHtml(lic.id)}"${isActive ? "" : " disabled"}>Pausar</button>`;
+        tr.innerHTML = `
+            <td>${escapeHtml(lic.name)}</td>
+            <td><code>${escapeHtml(lic.slug)}</code></td>
+            <td>${escapeHtml(lic.source_path || "—")}</td>
+            <td>${escapeHtml(lic.status)}</td>
+            <td class="licitacion-actions">
+                <button type="button" data-action="edit" data-id="${escapeHtml(lic.id)}">Editar</button>
+                ${toggleBtn}
+                <button type="button" class="danger" data-action="archive" data-id="${escapeHtml(lic.id)}">Borrar</button>
+            </td>
+        `;
+        tr.querySelectorAll("button[data-action]").forEach((btn) => {
+            btn.addEventListener("click", () => handleLicitacionAction(btn.dataset.action, lic));
+        });
+        licitacionesTableBody.appendChild(tr);
+    });
+}
+
+/**
+ * Dispatch a per-licitación management action (edit / pause / resume / archive),
+ * then refresh both the management table and the header selector.
+ */
+async function handleLicitacionAction(action, lic) {
+    try {
+        if (action === "edit") {
+            const name = prompt("Nuevo nombre", lic.name);
+            if (name === null) return;
+            const source = prompt("Carpeta origen (relativa)", lic.source_path || "");
+            if (source === null) return;
+            const res = await fetch(`/licitaciones/${encodeURIComponent(lic.id)}`, {
+                method: "PATCH",
+                headers: apiHeaders(true),
+                body: JSON.stringify({ name, source_path: source }),
+            });
+            if (!res.ok) throw new Error(`edit ${res.status}`);
+        } else if (action === "pause" || action === "resume") {
+            const res = await fetch(`/licitaciones/${encodeURIComponent(lic.id)}/${action}`, {
+                method: "POST",
+                headers: apiHeaders(),
+            });
+            if (!res.ok) throw new Error(`${action} ${res.status}`);
+        } else if (action === "archive") {
+            if (!confirm(`¿Archivar la licitación "${lic.name}"? Los datos no se eliminan.`)) return;
+            const res = await fetch(`/licitaciones/${encodeURIComponent(lic.id)}`, {
+                method: "DELETE",
+                headers: apiHeaders(false, true),
+            });
+            if (!res.ok) throw new Error(`archive ${res.status}`);
+        }
+        await loadLicitacionesTable();
+        await loadLicitacionSelector();
+    } catch (err) {
+        console.error("licitacion action", err);
+        alert(`No se pudo completar la acción: ${err?.message || err}`);
+    }
+}
+
+createLicitacionBtn?.addEventListener("click", async () => {
+    if (licitacionesCreateError) licitacionesCreateError.hidden = true;
+    if (licitacionesCreateOk) licitacionesCreateOk.hidden = true;
+    const name = (newLicitacionNameEl?.value || "").trim();
+    const source = (newLicitacionSourceEl?.value || "").trim();
+    if (!name) {
+        if (licitacionesCreateError) {
+            licitacionesCreateError.textContent = "El nombre es obligatorio.";
+            licitacionesCreateError.hidden = false;
+        }
+        return;
+    }
+    try {
+        const res = await fetch("/licitaciones", {
+            method: "POST",
+            headers: apiHeaders(true),
+            body: JSON.stringify({ name, source_path: source }),
+        });
+        if (res.status === 409) throw new Error("Ya existe una licitación con ese nombre.");
+        if (!res.ok) throw new Error(`crear ${res.status}`);
+        if (newLicitacionNameEl) newLicitacionNameEl.value = "";
+        if (newLicitacionSourceEl) newLicitacionSourceEl.value = "";
+        if (licitacionesCreateOk) {
+            licitacionesCreateOk.textContent = "Licitación creada.";
+            licitacionesCreateOk.hidden = false;
+        }
+        await loadLicitacionesTable();
+        await loadLicitacionSelector();
+    } catch (err) {
+        if (licitacionesCreateError) {
+            licitacionesCreateError.textContent = err?.message || String(err);
+            licitacionesCreateError.hidden = false;
+        }
+    }
+});
+
+refreshLicitacionesBtn?.addEventListener("click", () => {
+    loadLicitacionesTable().catch((e) => console.error("licitaciones", e));
+});
+
+tabLicitaciones?.addEventListener("click", () => setActiveTab("licitaciones"));
+
 /**
  * Initialize the main application by showing the dashboard tab and starting the status poll.
  * The status poll is started only once per page load.
  */
 function showMainApp() {
-    setActiveTab("dashboard");
+    loadLicitacionSelector()
+        .catch((e) => console.error("licitacion selector", e))
+        .finally(() => setActiveTab("dashboard"));
     if (!statusPollStarted) {
         statusPollStarted = true;
         setInterval(pollStatus, 30000);

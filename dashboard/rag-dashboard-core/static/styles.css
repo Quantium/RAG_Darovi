@@ -848,3 +848,28 @@ footer {
     font-size: 1.1rem;
 }
 
+/* Licitación selector (header) + management panel actions */
+.licitacion-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-right: 0.6rem;
+}
+
+.licitacion-picker__label {
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+#licitacion-select {
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    max-width: 14rem;
+}
+
+.licitacion-actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
