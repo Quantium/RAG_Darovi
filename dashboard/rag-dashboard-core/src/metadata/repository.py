@@ -1127,6 +1127,7 @@ async def init_db(database_url: str) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_ensure_file_record_stage_columns)
+        await conn.run_sync(_ensure_chat_interactions)
         await conn.run_sync(_ensure_default_licitacion)
     await engine.dispose()
 
@@ -1154,6 +1155,42 @@ def _ensure_file_record_stage_columns(conn) -> None:
         if column_name in existing:
             continue
         conn.execute(text(f"ALTER TABLE file_records ADD COLUMN {column_name} {column_type}"))
+
+
+def _ensure_chat_interactions(conn) -> None:
+    """Ensure the chat_interactions table and its ``username`` column exist.
+
+    ``chat_interactions`` has no ORM model — it is created by Alembic migrations 0004/0005 —
+    so ``create_all`` never builds it and never adds the later ``username`` column. Deployments
+    whose schema came from ``create_all`` (alembic_version empty) therefore lack the table or the
+    column, which 500s both GET /responses (SELECT username) and chat persistence (INSERT
+    username). This idempotently provisions both, mirroring _ensure_file_record_stage_columns.
+
+    Per-licitación schemas inherit the column automatically because provisioning copies
+    ``public.chat_interactions`` via ``CREATE TABLE ... (LIKE ... INCLUDING ALL)``.
+    """
+    inspector = inspect(conn)
+    if "chat_interactions" not in inspector.get_table_names():
+        conn.execute(
+            text(
+                "CREATE TABLE chat_interactions ("
+                " id SERIAL PRIMARY KEY,"
+                " conversation_id VARCHAR(36) NOT NULL,"
+                " question TEXT NOT NULL,"
+                " answer TEXT NOT NULL,"
+                " rating VARCHAR(8),"
+                " correction TEXT,"
+                " username VARCHAR(10) NOT NULL DEFAULT 'admin',"
+                " created_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                ")"
+            )
+        )
+        return
+    existing = {c["name"] for c in inspector.get_columns("chat_interactions")}
+    if "username" not in existing:
+        conn.execute(
+            text("ALTER TABLE chat_interactions ADD COLUMN username VARCHAR(10) NOT NULL DEFAULT 'admin'")
+        )
 
 
 def _ensure_default_licitacion(conn) -> None:
