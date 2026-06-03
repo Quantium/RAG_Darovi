@@ -61,7 +61,13 @@ class Retriever:
         else:
             connections.connect(host=settings.milvus_host, port=settings.milvus_port)
 
-    async def retrieve(self, query: str, top_k: int = 10, document_type: str | None = None) -> list[RetrievedChunk]:
+    async def retrieve(
+        self,
+        query: str,
+        top_k: int = 10,
+        document_type: str | None = None,
+        collection: str | None = None,
+    ) -> list[RetrievedChunk]:
         """Retrieve relevant document chunks using vector search and a keyword fallback.
 
         Checks Redis for a cached result before querying Milvus. Falls back to keyword
@@ -72,22 +78,27 @@ class Retriever:
             query: Natural-language query to embed and search.
             top_k: Number of vector search results to request from Milvus.
             document_type: Optional Milvus partition name to restrict the search scope.
+            collection: Per-licitación Milvus collection to search. Defaults to the global
+                ``settings.milvus_collection`` (the public 'Laboratorios Calidad' tenant).
+                The caller resolves this name from the registry; it is never a raw client value.
 
         Returns:
             Ranked list of RetrievedChunk instances (up to top_k * 2 items).
         """
         if not query.strip():
             return []
+        collection_name = collection or self._settings.milvus_collection
         cache_key = None
         if self._cache is not None:
-            raw_key = f"ra-retrieval-v2:{self._settings.embed_model}:{query}:{top_k}:{document_type}"
+            # Collection is part of the key so two licitaciones never share cached results.
+            raw_key = f"ra-retrieval-v2:{collection_name}:{self._settings.embed_model}:{query}:{top_k}:{document_type}"
             cache_key = hashlib.sha256(raw_key.encode()).hexdigest()
             cached = self._cache.get(cache_key)
             if cached:
                 payload = json.loads(cached)
                 return [RetrievedChunk(**item) for item in payload]
 
-        collection = Collection(self._settings.milvus_collection)
+        collection = Collection(collection_name)
         partition_names = [document_type] if document_type else None
 
         # --- Vector search ---

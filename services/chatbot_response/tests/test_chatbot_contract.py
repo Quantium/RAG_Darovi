@@ -56,3 +56,27 @@ async def test_retrieval_client_parses_contract_response() -> None:
         response = await api_client.retrieve(query="hello", top_k=5, document_type="doc", api_key="k")
         assert response.query == "hello"
         assert response.sources[0].source_name == "file.txt"
+
+
+@pytest.mark.asyncio
+async def test_retrieval_client_forwards_licitacion_in_payload() -> None:
+    """Verify RetrievalClient includes the licitación slug in the request body when provided."""
+    module = _load_retrieval_client_module()
+    settings = module.Settings(retrieval_admin_base_url="http://retrieval-admin:8010")
+
+    captured: dict = {}
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"query": "q", "context": "c", "sources": []}
+
+    async def _post(url, headers=None, json=None):
+        captured.update(json or {})
+        return fake_response
+
+    with patch.object(module.httpx, "AsyncClient", autospec=True) as client_cls:
+        client = client_cls.return_value.__aenter__.return_value
+        client.post = AsyncMock(side_effect=_post)
+        api_client = module.RetrievalClient(settings)
+        await api_client.retrieve(query="q", licitacion="obra_norte")
+
+    assert captured["licitacion"] == "obra_norte"

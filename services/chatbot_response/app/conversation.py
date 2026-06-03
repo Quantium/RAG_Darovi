@@ -21,16 +21,17 @@ class ConversationStore:
         self._redis = redis_client
         self._ttl = ttl_seconds
 
-    def get_history(self, conversation_id: str) -> list[ConversationTurn]:
+    def get_history(self, conversation_id: str, slug: str = "") -> list[ConversationTurn]:
         """Retrieve the full turn history for a conversation from Redis.
 
         Args:
             conversation_id: Unique identifier of the conversation.
+            slug: Licitación slug namespacing the key; empty keeps the legacy flat key.
 
         Returns:
             Ordered list of ConversationTurn objects, or an empty list if none exist.
         """
-        raw = self._redis.get(self._key(conversation_id))
+        raw = self._redis.get(self._key(conversation_id, slug))
         if not raw:
             return []
         try:
@@ -39,26 +40,30 @@ class ConversationStore:
         except Exception:
             return []
 
-    def append(self, conversation_id: str, role: str, content: str) -> None:
+    def append(self, conversation_id: str, role: str, content: str, slug: str = "") -> None:
         """Append a new turn to the conversation history and persist it in Redis.
 
         Args:
             conversation_id: Unique identifier of the conversation.
             role: Speaker role, either 'user' or 'assistant'.
             content: Text content of the turn.
+            slug: Licitación slug namespacing the key; empty keeps the legacy flat key.
         """
-        history = self.get_history(conversation_id)
+        history = self.get_history(conversation_id, slug)
         history.append(ConversationTurn(role=role, content=content))
-        self._redis.set(self._key(conversation_id), json.dumps([asdict(item) for item in history]), ex=self._ttl)
+        self._redis.set(self._key(conversation_id, slug), json.dumps([asdict(item) for item in history]), ex=self._ttl)
 
     @staticmethod
-    def _key(conversation_id: str) -> str:
-        """Build the Redis key for a given conversation ID.
+    def _key(conversation_id: str, slug: str = "") -> str:
+        """Build the Redis key for a conversation, namespaced by licitación slug.
 
         Args:
             conversation_id: Unique identifier of the conversation.
+            slug: Licitación slug; empty preserves the pre-multitenancy flat key.
 
         Returns:
-            Namespaced Redis key string.
+            ``chatbot:conv:<slug>:<id>`` when a slug is given, else ``chatbot:conv:<id>``.
         """
+        if slug:
+            return f"chatbot:conv:{slug}:{conversation_id}"
         return f"chatbot:conv:{conversation_id}"

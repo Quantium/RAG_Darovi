@@ -21,6 +21,7 @@ from .schemas import (
     StatusResponse,
 )
 from .settings import Settings
+from .tenant import validate_slug
 
 
 async def verify_api_key(request: Request) -> None:
@@ -71,9 +72,24 @@ def create_app() -> FastAPI:
 
         Returns:
             RetrieveResponse with the query, assembled context string, and source references.
+
+        Raises:
+            HTTPException: 400 for a malformed licitación slug, 404 for an unknown/inactive one.
         """
         retriever: Retriever = app.state.retriever
-        chunks = await retriever.retrieve(body.query, top_k=body.top_k, document_type=body.document_type)
+        metadata: MetadataService = app.state.metadata
+        collection: str | None = None
+        if body.licitacion:
+            try:
+                validate_slug(body.licitacion)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="invalid licitación slug")
+            collection = await metadata.resolve_active_collection(body.licitacion)
+            if collection is None:
+                raise HTTPException(status_code=404, detail="unknown or inactive licitación")
+        chunks = await retriever.retrieve(
+            body.query, top_k=body.top_k, document_type=body.document_type, collection=collection
+        )
         console = settings.minio_console_endpoint.rstrip("/")
         bucket = settings.minio_bucket_raw
         sources = [

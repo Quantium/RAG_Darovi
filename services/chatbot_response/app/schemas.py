@@ -9,6 +9,9 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     conversation_id: Optional[str] = None
     document_type: Optional[str] = None
+    # Licitación slug to scope retrieval, conversation history, and persistence. Required:
+    # the server rejects a missing/unknown one rather than defaulting to a tenant's data.
+    licitacion: Optional[str] = None
 
 
 class SourceReference(BaseModel):
@@ -32,6 +35,8 @@ class RateRequest(BaseModel):
     interaction_id: int
     rating: str
     correction: Optional[str] = None
+    # Licitación slug whose schema holds the interaction being rated.
+    licitacion: Optional[str] = None
 
 
 class RetrieveResponse(BaseModel):

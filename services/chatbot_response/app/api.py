@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from functools import partial
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,7 @@ from .llm import LLMService
 from .retrieval_client import RetrievalClient
 from .schemas import ChatRequest, ChatResponse, LoginRequest, LoginResponse, LogoutRequest, RateRequest
 from .settings import Settings
+from .tenant import validate_slug
 
 
 def _pg_url(db_url: str) -> str:
@@ -36,8 +38,22 @@ def _pg_url(db_url: str) -> str:
     return db_url.replace("postgresql+psycopg2://", "postgresql://")
 
 
-def _save_interaction_sync(db_url: str, conversation_id: str, question: str, answer: str, username: str) -> int:
-    """Persist a chat interaction to the database and return its generated row ID.
+def _set_search_path(cur, schema_name: str) -> None:
+    """Pin the connection's search_path to a licitación schema.
+
+    ``schema_name`` comes from the registry, but identifiers cannot be parameterized, so it
+    is re-validated here (``public`` or ``lic_<slug>``) before being interpolated.
+    """
+    from .tenant import validate_schema_name
+
+    safe = validate_schema_name(schema_name)
+    cur.execute(f'SET search_path TO "{safe}", public')
+
+
+def _save_interaction_sync(
+    db_url: str, conversation_id: str, question: str, answer: str, username: str, schema_name: str
+) -> int:
+    """Persist a chat interaction into the licitación schema and return its generated row ID.
 
     Args:
         db_url: SQLAlchemy-style database connection URL.
@@ -45,6 +61,7 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
         question: The user's query text.
         answer: The assistant's response text.
         username: The authenticated username of the asker.
+        schema_name: Licitación PostgreSQL schema to write into (e.g. 'lic_obra_norte' / 'public').
 
     Returns:
         The auto-generated primary key of the inserted chat_interactions row.
@@ -52,6 +69,7 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
     conn = psycopg2.connect(_pg_url(db_url))
     try:
         with conn.cursor() as cur:
+            _set_search_path(cur, schema_name)
             cur.execute(
                 "INSERT INTO chat_interactions (conversation_id, question, answer, username)"
                 " VALUES (%s, %s, %s, %s) RETURNING id",
@@ -64,18 +82,22 @@ def _save_interaction_sync(db_url: str, conversation_id: str, question: str, ans
         conn.close()
 
 
-def _update_rating_sync(db_url: str, interaction_id: int, rating: str, correction: str | None) -> None:
-    """Update the rating and optional correction for an existing chat interaction.
+def _update_rating_sync(
+    db_url: str, interaction_id: int, rating: str, correction: str | None, schema_name: str
+) -> None:
+    """Update the rating and optional correction for an interaction in the licitación schema.
 
     Args:
         db_url: SQLAlchemy-style database connection URL.
         interaction_id: Primary key of the chat_interactions row to update.
         rating: User-provided rating value (e.g. 'good', 'bad').
         correction: Optional corrected answer text provided by the user.
+        schema_name: Licitación PostgreSQL schema holding the interaction.
     """
     conn = psycopg2.connect(_pg_url(db_url))
     try:
         with conn.cursor() as cur:
+            _set_search_path(cur, schema_name)
             cur.execute(
                 "UPDATE chat_interactions SET rating = %s, correction = %s WHERE id = %s",
                 (rating, correction, interaction_id),
@@ -83,6 +105,59 @@ def _update_rating_sync(db_url: str, interaction_id: int, rating: str, correctio
         conn.commit()
     finally:
         conn.close()
+
+
+def _resolve_licitacion_sync(db_url: str, slug: str) -> dict | None:
+    """Return the active licitación matching ``slug`` (slug/name/schema_name/collection), or None."""
+    conn = psycopg2.connect(_pg_url(db_url))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT slug, name, schema_name, milvus_collection"
+                " FROM licitaciones WHERE slug = %s AND status = 'active'",
+                (slug,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return {"slug": row[0], "name": row[1], "schema_name": row[2], "collection": row[3]}
+
+
+def _list_active_licitaciones_sync(db_url: str) -> list[dict]:
+    """Return all active licitaciones (slug, name, collection) ordered by name."""
+    conn = psycopg2.connect(_pg_url(db_url))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT slug, name, milvus_collection FROM licitaciones"
+                " WHERE status = 'active' ORDER BY name"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [{"slug": r[0], "name": r[1], "collection": r[2]} for r in rows]
+
+
+async def _require_licitacion(db_url: str, slug: str | None) -> dict:
+    """Resolve an active licitación by slug or raise HTTPException.
+
+    Raises:
+        HTTPException: 400 if the slug is missing or malformed, 404 if no active licitación
+            matches (the request never silently falls back to another tenant's data).
+    """
+    if not slug:
+        raise HTTPException(status_code=400, detail="licitacion is required")
+    try:
+        validate_slug(slug)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid licitacion slug")
+    loop = asyncio.get_event_loop()
+    lic = await loop.run_in_executor(None, partial(_resolve_licitacion_sync, db_url, slug))
+    if lic is None:
+        raise HTTPException(status_code=404, detail="unknown or inactive licitación")
+    return lic
 
 _AGGREGATE_KEYWORDS = (
     "cuántos", "cuantos", "cuántas", "cuantas", "cuál es el total", "total de",
@@ -199,23 +274,33 @@ def create_app() -> FastAPI:
 
         Returns:
             ChatResponse with the answer, source references, conversation ID, and interaction ID.
+
+        Raises:
+            HTTPException: 400/404 when the licitación is missing, malformed, or unknown.
         """
-        import asyncio
         retrieval: RetrievalClient = app.state.retrieval
         llm: LLMService = app.state.llm
         conversation: ConversationStore = app.state.conversation
+        db_url = settings.database_url_sync.get_secret_value()
+        lic = await _require_licitacion(db_url, body.licitacion)
         conv_id = body.conversation_id or str(uuid4())
         api_key = request.headers.get("X-API-Key")
         top_k = _aggregate_top_k(body.query, settings)
-        retrieve = await retrieval.retrieve(query=body.query, top_k=top_k, document_type=body.document_type, api_key=api_key)
-        history = conversation.get_history(conv_id)
+        retrieve = await retrieval.retrieve(
+            query=body.query,
+            top_k=top_k,
+            document_type=body.document_type,
+            licitacion=lic["slug"],
+            api_key=api_key,
+        )
+        history = conversation.get_history(conv_id, slug=lic["slug"])
         answer = await llm.answer(query=body.query, context=retrieve.context, history=history)
-        conversation.append(conv_id, "user", body.query)
-        conversation.append(conv_id, "assistant", answer)
-        db_url = settings.database_url_sync.get_secret_value()
+        conversation.append(conv_id, "user", body.query, slug=lic["slug"])
+        conversation.append(conv_id, "assistant", answer, slug=lic["slug"])
         loop = asyncio.get_event_loop()
         interaction_id = await loop.run_in_executor(
-            None, partial(_save_interaction_sync, db_url, conv_id, body.query, answer, username)
+            None,
+            partial(_save_interaction_sync, db_url, conv_id, body.query, answer, username, lic["schema_name"]),
         )
         return ChatResponse(answer=answer, sources=retrieve.sources, conversation_id=conv_id, interaction_id=interaction_id)
 
@@ -228,14 +313,32 @@ def create_app() -> FastAPI:
 
         Returns:
             Status dict confirming the update.
+
+        Raises:
+            HTTPException: 400/404 when the licitación is missing, malformed, or unknown.
         """
-        import asyncio
         db_url = settings.database_url_sync.get_secret_value()
+        lic = await _require_licitacion(db_url, body.licitacion)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
-            None, partial(_update_rating_sync, db_url, body.interaction_id, body.rating, body.correction)
+            None,
+            partial(
+                _update_rating_sync,
+                db_url,
+                body.interaction_id,
+                body.rating,
+                body.correction,
+                lic["schema_name"],
+            ),
         )
         return {"status": "ok"}
+
+    @app.get("/licitaciones", dependencies=[Depends(verify_api_key)])
+    async def licitaciones() -> list[dict]:
+        """Return active licitaciones (slug, name, collection) for the chat selector combobox."""
+        db_url = settings.database_url_sync.get_secret_value()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, partial(_list_active_licitaciones_sync, db_url))
 
     @app.websocket("/ws/chat")
     async def ws_chat(ws: WebSocket) -> None:
@@ -272,19 +375,30 @@ def create_app() -> FastAPI:
                     continue
                 doc_type = payload.get("document_type")
                 conv_id = payload.get("conversation_id") or str(uuid4())
+                db_url_ws = settings_ws.database_url_sync.get_secret_value()
+                try:
+                    lic = await _require_licitacion(db_url_ws, payload.get("licitacion"))
+                except HTTPException as exc:
+                    await ws.send_json({"type": "error", "detail": str(exc.detail)})
+                    continue
                 top_k = _aggregate_top_k(query, settings_ws)
-                retrieve = await retrieval.retrieve(query=query, top_k=top_k, document_type=doc_type, api_key=incoming_key or None)
-                history = conversation.get_history(conv_id)
+                retrieve = await retrieval.retrieve(
+                    query=query,
+                    top_k=top_k,
+                    document_type=doc_type,
+                    licitacion=lic["slug"],
+                    api_key=incoming_key or None,
+                )
+                history = conversation.get_history(conv_id, slug=lic["slug"])
                 answer = await llm.answer(query=query, context=retrieve.context, history=history)
                 for token_word in answer.split():
                     await ws.send_json({"type": "token", "content": token_word + " "})
-                conversation.append(conv_id, "user", query)
-                conversation.append(conv_id, "assistant", answer)
-                import asyncio as _aio
-                db_url_ws = settings_ws.database_url_sync.get_secret_value()
-                ws_loop = _aio.get_event_loop()
+                conversation.append(conv_id, "user", query, slug=lic["slug"])
+                conversation.append(conv_id, "assistant", answer, slug=lic["slug"])
+                ws_loop = asyncio.get_event_loop()
                 interaction_id = await ws_loop.run_in_executor(
-                    None, partial(_save_interaction_sync, db_url_ws, conv_id, query, answer, ws_username)
+                    None,
+                    partial(_save_interaction_sync, db_url_ws, conv_id, query, answer, ws_username, lic["schema_name"]),
                 )
                 await ws.send_json(
                     {

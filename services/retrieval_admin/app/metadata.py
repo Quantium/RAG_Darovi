@@ -42,6 +42,23 @@ class MetadataService:
         """Dispose of the async database engine and release connection pool resources."""
         await self._engine.dispose()
 
+    async def resolve_active_collection(self, slug: str) -> str | None:
+        """Resolve a licitación slug to its Milvus collection via the registry.
+
+        Returns the ``milvus_collection`` for the active licitación with this slug, or None
+        if no active licitación matches (unknown / paused / archived). The collection name
+        therefore always originates from the controlled registry, never from client input.
+
+        Args:
+            slug: Licitación slug (already format-validated by the caller).
+        """
+        query = text(
+            "SELECT milvus_collection FROM licitaciones WHERE slug = :slug AND status = 'active'"
+        )
+        async with self._session_factory() as session:
+            row = (await session.execute(query, {"slug": slug})).first()
+        return row[0] if row else None
+
     async def get_status_counts(self) -> dict[str, int]:
         """Query aggregate file counts grouped by pipeline status.
 

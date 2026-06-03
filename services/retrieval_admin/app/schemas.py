@@ -9,6 +9,9 @@ class RetrieveRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=4096)
     top_k: int = Field(default=10, ge=1, le=50)
     document_type: Optional[str] = None
+    # Licitación slug. The collection is resolved server-side from the registry; when
+    # omitted the search targets the global (public) collection for back-compat.
+    licitacion: Optional[str] = None
 
 
 class SourceReference(BaseModel):

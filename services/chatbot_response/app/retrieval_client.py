@@ -15,13 +15,22 @@ class RetrievalClient:
         """
         self._base_url = settings.retrieval_admin_base_url.rstrip("/")
 
-    async def retrieve(self, *, query: str, top_k: int = 10, document_type: str | None = None, api_key: str | None = None) -> RetrieveResponse:
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        top_k: int = 10,
+        document_type: str | None = None,
+        licitacion: str | None = None,
+        api_key: str | None = None,
+    ) -> RetrieveResponse:
         """Send a retrieval request to the retrieval-admin service and return ranked results.
 
         Args:
             query: Natural-language query to embed and search.
             top_k: Maximum number of results to return.
             document_type: Optional filter to restrict results to a specific document category.
+            licitacion: Licitación slug; retrieval-admin resolves it to that tenant's collection.
             api_key: Optional X-API-Key header value to forward to the downstream service.
 
         Returns:
@@ -34,6 +43,8 @@ class RetrievalClient:
         if api_key:
             headers["X-API-Key"] = api_key
         payload = {"query": query, "top_k": top_k, "document_type": document_type}
+        if licitacion:
+            payload["licitacion"] = licitacion
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(f"{self._base_url}/retrieve", headers=headers, json=payload)
             response.raise_for_status()
