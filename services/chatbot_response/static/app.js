@@ -17,11 +17,15 @@ const messages     = document.getElementById("messages");
 const sourcesEl    = document.getElementById("sources");
 
 let conversationId = null;
+let selectedLicitacion = null;
+const licitacionSelect = document.getElementById("licitacion-select");
+const sendBtn = form.querySelector(".send-btn");
 
 // ── Show/hide sections ────────────────────────────────────────────────────────
 function showChat() {
   loginSection.hidden = true;
   chatSection.hidden = false;
+  loadLicitaciones();
 }
 
 function showLogin() {
@@ -203,7 +207,7 @@ async function postRating(interactionId, rating, correction) {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${getToken()}`,
       },
-      body: JSON.stringify({ interaction_id: interactionId, rating, correction }),
+      body: JSON.stringify({ interaction_id: interactionId, rating, correction, licitacion: selectedLicitacion }),
     });
   } catch (_) {}
 }
@@ -213,6 +217,7 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const query = input.value.trim();
   if (!query) return;
+  if (!selectedLicitacion) return;
   input.value = "";
 
   addMessage("user", query);
@@ -227,7 +232,7 @@ form.addEventListener("submit", async (event) => {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${getToken()}`,
       },
-      body: JSON.stringify({ query, conversation_id: conversationId }),
+      body: JSON.stringify({ query, conversation_id: conversationId, licitacion: selectedLicitacion }),
     });
     if (res.status === 401) {
       clearToken();
@@ -244,5 +249,90 @@ form.addEventListener("submit", async (event) => {
     addRatingButtons(data.interaction_id);
   } catch (error) {
     assistant._bubble.textContent = `Error: ${String(error)}`;
+  }
+});
+
+// ── Licitación selector + URL hash ──────────────────────────────────────────────
+const LICITACION_KEY = "chatbot_licitacion";
+
+function escHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Enable/disable the chat input + send button (no licitación selected => disabled).
+ */
+function setChatEnabled(enabled) {
+  if (sendBtn) sendBtn.disabled = !enabled;
+  if (input) input.disabled = !enabled;
+}
+
+/**
+ * Apply a licitación selection: sync the <select>, URL hash, and localStorage, and
+ * (optionally) reset the conversation so context never crosses licitaciones.
+ */
+function selectLicitacion(slug, { updateHash = true, reset = true } = {}) {
+  selectedLicitacion = slug || null;
+  if (slug) {
+    if (licitacionSelect) licitacionSelect.value = slug;
+    localStorage.setItem(LICITACION_KEY, slug);
+    if (updateHash && location.hash.replace(/^#/, "") !== slug) {
+      history.replaceState(null, "", `#${slug}`);
+    }
+  }
+  if (reset) {
+    conversationId = null;
+    messages.innerHTML = "";
+    sourcesEl.innerHTML = "";
+    document.querySelectorAll(".rating-bar").forEach((el) => el.remove());
+  }
+  setChatEnabled(!!selectedLicitacion);
+}
+
+/**
+ * Populate the licitación selector from GET /licitaciones and pick the initial one.
+ * Priority: URL hash > localStorage > first active. Unknown hash falls back and is cleared.
+ */
+async function loadLicitaciones() {
+  setChatEnabled(false);
+  try {
+    const res = await fetch("/licitaciones");
+    if (!res.ok) throw new Error(`licitaciones ${res.status}`);
+    const rows = await res.json();
+    if (licitacionSelect) {
+      licitacionSelect.innerHTML = rows
+        .map((r) => `<option value="${escHtml(r.slug)}">${escHtml(r.name)}</option>`)
+        .join("");
+    }
+    const slugs = rows.map((r) => r.slug);
+    const hashSlug = (location.hash || "").replace(/^#/, "");
+    const stored = localStorage.getItem(LICITACION_KEY) || "";
+    let chosen = "";
+    if (hashSlug && slugs.includes(hashSlug)) chosen = hashSlug;
+    else if (stored && slugs.includes(stored)) chosen = stored;
+    else if (rows.length) chosen = rows[0].slug;
+    if (hashSlug && !slugs.includes(hashSlug)) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+    selectLicitacion(chosen, { updateHash: true, reset: false });
+  } catch (err) {
+    console.error("licitaciones", err);
+    setChatEnabled(false);
+  }
+}
+
+licitacionSelect?.addEventListener("change", () => {
+  selectLicitacion(licitacionSelect.value, { updateHash: true, reset: true });
+});
+
+window.addEventListener("hashchange", () => {
+  const hashSlug = (location.hash || "").replace(/^#/, "");
+  const slugs = Array.from(licitacionSelect?.options || []).map((o) => o.value);
+  if (hashSlug && slugs.includes(hashSlug) && hashSlug !== selectedLicitacion) {
+    selectLicitacion(hashSlug, { updateHash: false, reset: true });
   }
 });
