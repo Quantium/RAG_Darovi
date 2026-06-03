@@ -20,7 +20,13 @@ from src.worker.task_helpers import (
     build_metadata_repo,
     build_settings,
     build_storage,
+    build_tenant_metadata_repo,
     derive_document_type,
+)
+from src.worker.tenant_runtime import (
+    context_from_payload,
+    is_vectorize_paused,
+    read_active_tenants,
 )
 
 logger = structlog.get_logger()
@@ -218,8 +224,9 @@ def embed_file(self, convert_result: dict) -> dict:
         return convert_result
 
     settings = build_settings()
-    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:vectorize"):
-        task_logger.info("task.skipped", reason="vectorize paused")
+    tenant = context_from_payload(convert_result, settings)
+    if is_vectorize_paused(redis.Redis.from_url(settings.redis_cache_url), tenant):
+        task_logger.info("task.skipped", reason="vectorize paused", slug=tenant.slug)
         return {"skipped": True, "drive_file_id": drive_file_id}
 
     storage = build_storage(settings)
@@ -240,15 +247,15 @@ def embed_file(self, convert_result: dict) -> dict:
 
         if not chunks:
             task_logger.info("task.embed.no_chunks")
-            asyncio.run(_update_embedded(settings, drive_file_id, chunk_count=0))
+            asyncio.run(_update_embedded(settings, drive_file_id, 0, tenant.schema_name))
             return {"drive_file_id": drive_file_id, "chunk_count": 0}
 
         kv_summary = convert_result.get("kv_summary") or {}
         if kv_summary:
             chunks = _prepend_kv_summary_to_first_chunk(chunks, kv_summary)
 
-        chunk_count = asyncio.run(_embed_and_store(settings, drive_file_id, chunks))
-        task_logger.info("task.completed", chunk_count=chunk_count)
+        chunk_count = asyncio.run(_embed_and_store(settings, drive_file_id, chunks, tenant))
+        task_logger.info("task.completed", chunk_count=chunk_count, slug=tenant.slug)
         return {"drive_file_id": drive_file_id, "chunk_count": chunk_count}
     except Exception as exc:
         task_logger.error("task.failed", error=str(exc))
@@ -277,8 +284,12 @@ def _prepend_kv_summary_to_first_chunk(chunks: list, kv_summary: dict) -> list:
     return chunks
 
 
-async def _embed_and_store(settings, drive_file_id: str, chunks: list) -> int:
-    """Single async context for all embedding + storage operations."""
+async def _embed_and_store(settings, drive_file_id: str, chunks: list, tenant) -> int:
+    """Single async context for all embedding + storage operations.
+
+    Vectors land in the licitación's Milvus collection (``tenant.collection``) and the
+    metadata write-back targets the licitación's PostgreSQL schema (``tenant.schema_name``).
+    """
     from src.vectorizer.embedder import BatchEmbedder
     from src.vectorizer.milvus_store import MilvusStore
 
@@ -286,7 +297,7 @@ async def _embed_and_store(settings, drive_file_id: str, chunks: list) -> int:
     texts = [c.text for c in chunks]
     embeddings = await embedder.embed_texts(texts)
 
-    store = MilvusStore(settings)
+    store = MilvusStore(settings, collection_name=tenant.collection)
     store.ensure_collection()
     store.delete_by_source(drive_file_id)
 
@@ -304,17 +315,18 @@ async def _embed_and_store(settings, drive_file_id: str, chunks: list) -> int:
     ]
     store.upsert(chunk_dicts, embeddings)
 
-    await _update_embedded(settings, drive_file_id, chunk_count=len(chunks))
+    await _update_embedded(settings, drive_file_id, len(chunks), tenant.schema_name)
     return len(chunks)
 
 
-async def _update_embedded(settings, drive_file_id: str, chunk_count: int) -> None:
-    """Update metadata: chunk_count, status, last_processed_at."""
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+async def _update_embedded(settings, drive_file_id: str, chunk_count: int, schema_name: str) -> None:
+    """Update metadata (chunk_count, status, last_processed_at) in the tenant schema."""
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     from src.metadata.repository import MetadataRepository
+    from src.tenant.engine import build_async_tenant_engine
 
-    engine = create_async_engine(settings.database_url.get_secret_value())
+    engine = build_async_tenant_engine(settings, schema_name)
     async with AsyncSession(engine) as session:
         repo = MetadataRepository(session)
         await repo.update_chunk_count(drive_file_id, chunk_count)
@@ -364,8 +376,9 @@ def vision_extract(self, convert_result: dict) -> dict:
         return convert_result
 
     settings = build_settings()
+    tenant = context_from_payload(convert_result, settings)
     storage = build_storage(settings)
-    repo, cleanup = build_metadata_repo(settings)
+    repo, cleanup = build_tenant_metadata_repo(settings, tenant.schema_name)
 
     try:
         text_key = convert_result["minio_text_key"]
@@ -847,6 +860,11 @@ def dispatch_file_pipeline(file_meta: dict, trace_id: str | None = None) -> None
     `vision_extract` is a no-op for documents whose converters did not
     emit any VLM sentinels (born-digital PDFs, sheets, plain text, etc.),
     so the chain is safe to apply unconditionally.
+
+    This legacy in-dashboard ingest path is single-tenant: the chain carries no
+    licitación payload, so the downstream tasks default to the public schema and the
+    global collection. Multi-tenant ingestion runs through the ingest_raw / extract_text
+    services and the registry-driven poll tasks instead.
     """
     if trace_id is None:
         trace_id = str(uuid4())
@@ -873,7 +891,15 @@ def dispatch_downstream_pipeline(convert_result: dict, trace_id: str | None = No
 
 @app.task(bind=True, max_retries=1)
 def poll_text_ready_for_embedding(self):
-    """Poll Postgres for text-ready files and queue downstream processing."""
+    """Poll each active licitación for text-ready files and queue downstream processing.
+
+    Iterates the registry; every licitación is swept inside its own PostgreSQL schema and
+    its files are dispatched carrying the licitación context (slug / schema / collection) so
+    embedding lands in the right schema and Milvus collection. One licitación's failure does
+    not abort the others.
+    """
+    from sqlalchemy import create_engine
+
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
@@ -881,19 +907,45 @@ def poll_text_ready_for_embedding(self):
     task_logger = logger.bind(trace_id=trace_id, task="poll_text_ready_for_embedding")
 
     settings = build_settings()
-    if redis.Redis.from_url(settings.redis_cache_url).exists("rag:pause:vectorize"):
-        task_logger.info("poll.skipped_paused", reason="vectorize paused")
-        return
+    redis_client = redis.Redis.from_url(settings.redis_cache_url)
+    if redis_client.exists("rag:pause:vectorize"):
+        task_logger.info("poll.skipped_paused", reason="vectorize paused (global)")
+        return {"queued": 0, "skipped": 0}
 
-    repo, cleanup = build_metadata_repo(settings)
+    stale_threshold = settings.embedding_poll_interval_seconds * 6
+    base_engine = create_engine(settings.database_url_sync.get_secret_value())
     queued = 0
     skipped = 0
     try:
-        stale_threshold = settings.embedding_poll_interval_seconds * 6
+        for tenant in read_active_tenants(base_engine, settings):
+            if is_vectorize_paused(redis_client, tenant):
+                task_logger.info("poll.tenant_skipped_paused", slug=tenant.slug)
+                continue
+            try:
+                queued_t, skipped_t = _poll_tenant_text_ready(
+                    settings, tenant, stale_threshold, trace_id, task_logger
+                )
+                queued += queued_t
+                skipped += skipped_t
+            except Exception as exc:  # isolate per-licitación failures
+                task_logger.error("poll.tenant_failed", slug=tenant.slug, error=str(exc))
+    finally:
+        base_engine.dispose()
+
+    task_logger.info("task.completed", queued=queued, skipped=skipped)
+    return {"queued": queued, "skipped": skipped}
+
+
+def _poll_tenant_text_ready(settings, tenant, stale_threshold, trace_id, task_logger):
+    """Sweep one licitación's schema for text-ready files; returns (queued, skipped)."""
+    repo, cleanup = build_tenant_metadata_repo(settings, tenant.schema_name)
+    queued = 0
+    try:
         stale_reset = repo.reset_stale_embedding_queued_sync(stale_threshold)
         if stale_reset:
             task_logger.warning(
                 "poll.stale_embedding_queued_reset",
+                slug=tenant.slug,
                 count=stale_reset,
                 threshold_seconds=stale_threshold,
             )
@@ -908,19 +960,24 @@ def poll_text_ready_for_embedding(self):
                 "mime_type": record["mime_type"],
                 "name": record["name"],
                 "document_type": derive_document_type(record["mime_type"]),
+                **tenant.payload(),
             }
             dispatch_downstream_pipeline(convert_result, trace_id=trace_id)
             queued += 1
-
-        task_logger.info("task.completed", queued=queued, skipped=skipped)
-        return {"queued": queued, "skipped": skipped}
+        return queued, skipped
     finally:
         cleanup()
 
 
 @app.task(bind=True)
 def poll_vision_pending(self):
-    """Poll for vision_pending files and dispatch vision_extract + embed_file chain."""
+    """Poll each active licitación for vision_pending files and dispatch vision+embed chains.
+
+    Paused/archived licitaciones are excluded by the registry-status filter, so OCR is gated
+    per licitación without any Redis dependency. One licitación's failure is isolated.
+    """
+    from sqlalchemy import create_engine
+
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
@@ -928,7 +985,24 @@ def poll_vision_pending(self):
     task_logger = logger.bind(trace_id=trace_id, task="poll_vision_pending")
 
     settings = build_settings()
-    repo, cleanup = build_metadata_repo(settings)
+    base_engine = create_engine(settings.database_url_sync.get_secret_value())
+    queued = 0
+    try:
+        for tenant in read_active_tenants(base_engine, settings):
+            try:
+                queued += _poll_tenant_vision_pending(settings, tenant, trace_id)
+            except Exception as exc:  # isolate per-licitación failures
+                task_logger.error("poll.tenant_failed", slug=tenant.slug, error=str(exc))
+    finally:
+        base_engine.dispose()
+
+    task_logger.info("task.completed", queued=queued)
+    return {"queued": queued}
+
+
+def _poll_tenant_vision_pending(settings, tenant, trace_id) -> int:
+    """Dispatch vision+embed chains for one licitación's vision_pending files; returns count."""
+    repo, cleanup = build_tenant_metadata_repo(settings, tenant.schema_name)
     queued = 0
     try:
         for record in repo.list_vision_pending_sync():
@@ -941,17 +1015,15 @@ def poll_vision_pending(self):
                 "mime_type": record.mime_type,
                 "name": record.name,
                 "document_type": derive_document_type(record.mime_type),
+                **tenant.payload(),
             }
             repo.update_status_sync(record.drive_file_id, "vision_processing")
-            from celery import chain as celery_chain
-            celery_chain(
+            chain(
                 vision_extract.s(convert_result),
                 embed_file.s(),
             ).apply_async(headers={"trace_id": trace_id})
             queued += 1
-
-        task_logger.info("task.completed", queued=queued)
-        return {"queued": queued}
+        return queued
     finally:
         cleanup()
 

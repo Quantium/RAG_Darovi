@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 from unittest.mock import patch, MagicMock, AsyncMock, ANY
 
 from src.worker.tasks import (
@@ -91,22 +92,32 @@ class TestWorkerTasks:
     def test_embed_task_calls_embedder(self):
         """Verify embed_file returns a chunk_count from the mocked async embedding run."""
         with patch("src.worker.tasks.build_settings"):
-            with patch("src.worker.tasks.build_storage") as mock_storage_builder:
-                with patch("src.worker.tasks.asyncio.run") as mock_run:
-                    mock_storage = MagicMock()
-                    mock_storage_builder.return_value = mock_storage
-                    mock_storage.download.return_value = b"some text"
-                    mock_run.return_value = 10  # chunk count
+            with patch("src.worker.tasks.redis.Redis") as mock_redis_cls:
+                with patch("src.worker.tasks.build_storage") as mock_storage_builder:
+                    with patch("src.worker.tasks.asyncio.run") as mock_run:
+                        mock_redis_cls.from_url.return_value.exists.return_value = False
+                        mock_storage = MagicMock()
+                        mock_storage_builder.return_value = mock_storage
+                        mock_storage.download.return_value = (
+                            b"# Report\n\nBody text for the document.\n\n## Section\n\nMore body text."
+                        )
 
-                    result = embed_file(
-                        {
-                            "drive_file_id": "f1",
-                            "minio_text_key": "texts/f1.txt",
-                            "name": "test.pdf",
-                            "document_type": "pdf",
-                        }
-                    )
-                    assert result["chunk_count"] == 10
+                        # Close the coroutine we intercept so it is not flagged "never awaited".
+                        def _fake_run(coro):
+                            coro.close()
+                            return 10  # chunk count
+
+                        mock_run.side_effect = _fake_run
+
+                        result = embed_file(
+                            {
+                                "drive_file_id": "f1",
+                                "minio_text_key": "texts/f1.txt",
+                                "name": "test.pdf",
+                                "document_type": "pdf",
+                            }
+                        )
+                        assert result["chunk_count"] == 10
 
     def test_task_chain_download_convert_embed(self):
         """Verify the download → convert → embed task chain can be constructed without error."""
@@ -252,27 +263,50 @@ class TestWorkerTasks:
         assert result["status"] == "queued"
 
     @patch("src.worker.tasks.dispatch_downstream_pipeline")
-    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.tasks.build_tenant_metadata_repo")
+    @patch("src.worker.tasks.read_active_tenants")
+    @patch("src.worker.tasks.redis.Redis")
     @patch("src.worker.tasks.build_settings")
     def test_poll_text_ready_for_embedding_dispatches_downstream(
         self,
-        _mock_settings,
+        mock_build_settings,
+        mock_redis_cls,
+        mock_read_tenants,
         mock_repo_builder,
         mock_dispatch_downstream,
     ):
-        """Verify poll_text_ready_for_embedding marks files as 'embedding_queued' and dispatches downstream pipeline."""
+        """Verify the poll sweeps the active licitación schema and dispatches downstream with tenant context."""
+        from src.worker.tenant_runtime import TenantContext
+
+        mock_build_settings.return_value = Settings(database_url_sync=SecretStr("sqlite://"))
+        mock_redis_cls.from_url.return_value.exists.return_value = False
+        mock_read_tenants.return_value = [
+            TenantContext(slug="obra_norte", schema_name="lic_obra_norte", collection="rag_obra_norte")
+        ]
+
         mock_repo = MagicMock()
-        record = MagicMock()
-        record.drive_file_id = "f1"
-        record.minio_text_key = "f1.txt"
-        record.minio_raw_key = "f1/test.pdf"
-        record.mime_type = "application/pdf"
-        record.name = "test.pdf"
-        mock_repo.list_ready_for_embedding_sync.return_value = [record]
+        mock_repo.reset_stale_embedding_queued_sync.return_value = 0
+        mock_repo.batch_fail_missing_text_key_sync.return_value = 0
+        mock_repo.batch_mark_embedding_queued_sync.return_value = [
+            {
+                "drive_file_id": "f1",
+                "minio_text_key": "obra_norte/f1.md",
+                "minio_raw_key": "obra_norte/f1.pdf",
+                "mime_type": "application/pdf",
+                "name": "test.pdf",
+            }
+        ]
         mock_repo_builder.return_value = (mock_repo, lambda: None)
 
         result = poll_text_ready_for_embedding()
 
-        mock_repo.update_text_stage_sync.assert_called_once_with("f1", text_status="embedding_queued", text_error=None)
+        # The sweep is scoped to the licitación's PostgreSQL schema.
+        mock_repo_builder.assert_called_once_with(ANY, "lic_obra_norte")
+        mock_repo.batch_mark_embedding_queued_sync.assert_called_once()
+        # Downstream payload carries the tenant context for schema/collection routing.
         mock_dispatch_downstream.assert_called_once()
+        convert_result = mock_dispatch_downstream.call_args.args[0]
+        assert convert_result["slug"] == "obra_norte"
+        assert convert_result["schema_name"] == "lic_obra_norte"
+        assert convert_result["collection"] == "rag_obra_norte"
         assert result["queued"] == 1

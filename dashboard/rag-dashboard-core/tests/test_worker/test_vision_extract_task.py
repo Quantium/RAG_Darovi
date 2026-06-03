@@ -22,7 +22,7 @@ def _convert_result() -> dict:
 
 
 class TestVisionExtractTask:
-    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.tasks.build_tenant_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     @patch("src.worker.tasks.build_settings")
     def test_noop_when_no_sentinels(self, mock_settings, mock_storage_builder, mock_repo_builder):
@@ -40,7 +40,7 @@ class TestVisionExtractTask:
         assert result["drive_file_id"] == "f1"
 
     @patch("src.worker.tasks.redis.Redis")
-    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.tasks.build_tenant_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     @patch("src.worker.tasks.build_settings")
     def test_replaces_sentinel_with_vlm_text_and_persists_kv(
@@ -87,7 +87,7 @@ class TestVisionExtractTask:
 
             mock_convert.return_value = [Image.new("RGB", (10, 10), (255, 255, 255))]
 
-            with patch("src.worker.tasks.OllamaVisionClient"), patch(
+            with patch("src.worker.tasks.OpenAICompatVisionClient"), patch(
                 "src.worker.tasks.VisionExtractor"
             ) as mock_extractor_cls:
                 mock_extractor = mock_extractor_cls.return_value
@@ -117,7 +117,7 @@ class TestVisionExtractTask:
         assert result["kv_summary"]["issuer"] == "ACME"
 
     @patch("src.worker.tasks.redis.Redis")
-    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.tasks.build_tenant_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     @patch("src.worker.tasks.build_settings")
     def test_falls_back_to_tesseract_when_breaker_open(

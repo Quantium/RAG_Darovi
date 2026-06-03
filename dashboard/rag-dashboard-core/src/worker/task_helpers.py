@@ -52,6 +52,29 @@ def build_metadata_repo(settings: Settings | None = None) -> tuple[SyncMetadataR
     return repo, cleanup
 
 
+def build_tenant_metadata_repo(
+    settings: Settings, schema_name: str
+) -> tuple[SyncMetadataRepository, Callable[[], None]]:
+    """Return (repo, cleanup) bound to the licitación ``schema_name``.
+
+    Same contract as :func:`build_metadata_repo`, but every bare-table query resolves
+    inside the tenant schema because the engine pins ``search_path`` at the connection
+    level. ``schema_name='public'`` yields the legacy single-tenant behavior.
+    """
+    from src.tenant.engine import build_tenant_engine
+
+    engine = build_tenant_engine(settings, schema_name)
+    session = Session(engine)
+    repo = SyncMetadataRepository(session)
+
+    def cleanup() -> None:
+        """Close the database session and dispose of the engine connection pool."""
+        session.close()
+        engine.dispose()
+
+    return repo, cleanup
+
+
 def ensure_milvus_collection(settings: Settings | None = None) -> None:
     """Create the Milvus collection if it doesn't exist. Idempotent."""
     from src.vectorizer.milvus_store import MilvusStore

@@ -31,7 +31,13 @@ from src.metadata.repository import (
     LicitacionRepository,
 )
 from src.tenant.provisioning import create_tenant_collection, provision_tenant_schema
-from src.tenant.slug import collection_name_for_slug, schema_name_for_slug, slugify, validate_slug
+from src.tenant.slug import (
+    collection_name_for_slug,
+    pause_key,
+    schema_name_for_slug,
+    slugify,
+    validate_slug,
+)
 
 PAUSE_STAGES = ("ingest", "transform", "vectorize")
 
@@ -53,10 +59,6 @@ class LicitacionConflict(LicitacionError):
 
 class LicitacionNotFound(LicitacionError):
     """No licitación with the given id. -> HTTP 404."""
-
-
-def _pause_key(stage: str, slug: str) -> str:
-    return f"rag:pause:{stage}:{slug}"
 
 
 class LicitacionService:
@@ -172,14 +174,14 @@ class LicitacionService:
         """Pause ingest/transform/vectorize for the licitación (status + Redis pause flags)."""
         row = await self._set_status(licitacion_id, LICITACION_STATUS_PAUSED)
         for stage in PAUSE_STAGES:
-            self._redis.set(_pause_key(stage, row.slug), "1")
+            self._redis.set(pause_key(stage, row.slug), "1")
         return row
 
     async def resume(self, licitacion_id: str) -> Licitacion:
         """Resume a paused licitación (status active + clear Redis pause flags)."""
         row = await self._set_status(licitacion_id, LICITACION_STATUS_ACTIVE)
         for stage in PAUSE_STAGES:
-            self._redis.delete(_pause_key(stage, row.slug))
+            self._redis.delete(pause_key(stage, row.slug))
         return row
 
     async def archive(self, licitacion_id: str) -> Licitacion:
@@ -212,7 +214,7 @@ class LicitacionService:
     def _purge_redis(self, slug: str) -> None:
         """Delete the licitación's ephemeral Redis keys (pause flags + conversation history)."""
         for stage in PAUSE_STAGES:
-            self._redis.delete(_pause_key(stage, slug))
+            self._redis.delete(pause_key(stage, slug))
         try:
             for key in self._redis.scan_iter(match=f"chatbot:conv:{slug}:*"):
                 self._redis.delete(key)

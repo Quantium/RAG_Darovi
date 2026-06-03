@@ -70,6 +70,16 @@ def validate_schema_name(schema_name: str) -> str:
     return schema_name
 
 
+def pause_key(stage: str, slug: str) -> str:
+    """Redis pause-flag key for a (stage, licitación) pair: ``rag:pause:<stage>:<slug>``.
+
+    ``stage`` is one of ``ingest`` / ``transform`` / ``vectorize``. The slug-less
+    ``rag:pause:<stage>`` key (without trailing slug) remains a global kill switch
+    honored across every licitación.
+    """
+    return f"rag:pause:{stage}:{slug}"
+
+
 def tenant_key(slug: str | None, key: str) -> str:
     """Prefix a MinIO object key with the licitación slug folder.
 

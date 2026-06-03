@@ -6,10 +6,12 @@ managers live in `session`. The Licitacion ORM model and its repository live in
 
 from __future__ import annotations
 
+from src.tenant.engine import build_async_tenant_engine, build_tenant_engine
 from src.tenant.slug import (
     LICITACION_COLLECTION_PREFIX,
     LICITACION_SCHEMA_PREFIX,
     collection_name_for_slug,
+    pause_key,
     schema_name_for_slug,
     slugify,
     tenant_key,
@@ -21,7 +23,10 @@ from src.tenant.session import tenant_session, tenant_session_sync
 __all__ = [
     "LICITACION_COLLECTION_PREFIX",
     "LICITACION_SCHEMA_PREFIX",
+    "build_async_tenant_engine",
+    "build_tenant_engine",
     "collection_name_for_slug",
+    "pause_key",
     "schema_name_for_slug",
     "slugify",
     "tenant_key",
