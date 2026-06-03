@@ -224,6 +224,27 @@ Every file moves through these states in `file_records.text_status` and `file_re
 
 ## 5. System Architecture (Technical)
 
+### Multi-Tenancy by Licitación
+
+Each **licitación** (tender) is an isolated tenant. The registry table `public.licitaciones`
+maps a licitación to its own PostgreSQL schema (`lic_<slug>`), Milvus collection (`rag_<slug>`),
+and MinIO key prefix (`<slug>/`). The legacy "Laboratorios Calidad" data stays in the `public`
+schema and the `rag_documents` collection (no prefix), so existing data keeps working unchanged.
+
+Every component reads the registry rather than trusting client input:
+
+- **Ingestion / extraction / embedding** iterate the active licitaciones and operate inside each
+  one's schema + storage prefix; paused or archived licitaciones are skipped.
+- **Retrieval and chat** require a licitación slug and resolve its collection/schema server-side,
+  rejecting unknown or inactive ones — answers and sources never cross between licitaciones.
+- **Dashboard** has a licitación selector (cards scope to it) and a *Licitaciones* panel to
+  create / edit / pause / archive tenants. **Chat** has a selector mirrored in the URL hash
+  (`#<slug>`), so a link opens the right licitación.
+
+Manage licitaciones in the dashboard *Licitaciones* tab; creating one provisions its schema and
+collection automatically. Drop that licitación's files under its `source_path` (relative to
+`LOCAL_SOURCE_FOLDER`) and the pipeline picks them up on the next cycle.
+
 ### Deployment Overview
 
 The system runs in two independent environments that share the same managed cloud services:

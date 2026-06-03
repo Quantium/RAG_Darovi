@@ -74,6 +74,51 @@ Ollama is **not** used. Google Drive is **not** used.
 
 ---
 
+## Multi-Tenancy by Licitación
+
+The stack is multi-tenant: each **licitación** (tender) is an isolated tenant. The registry
+table `public.licitaciones` (Alembic `0006`) is the single source of truth; client input is
+never used to build a schema/collection/key — those identifiers are always read from the registry.
+
+| Boundary | Laboratorios Calidad (legacy/public) | New licitación |
+|----------|--------------------------------------|----------------|
+| slug | `laboratorios_calidad` | `slug([a-z0-9_]+)` from name, frozen at creation |
+| PostgreSQL schema | `public` | `lic_<slug>` (file_records/extracted_documents/sync_state/chat_interactions) |
+| Milvus collection | `rag_documents` | `rag_<slug>` |
+| MinIO key prefix | `` (none) | `<slug>/` for raw + text |
+| Redis pause flag | `rag:pause:<phase>` (global kill switch) | `rag:pause:<phase>:<slug>` |
+| Redis conv history | `chatbot:conv:<id>` | `chatbot:conv:<slug>:<id>` |
+| Chat URL hash | — | `#<slug>` (display shows `name`) |
+
+**How it flows (every component reads the registry, no per-tenant queues):**
+- **Provisioning** (`dashboard/.../src/tenant/service.py`): `LicitacionService` create →
+  `CREATE SCHEMA` + `CREATE TABLE LIKE public.* INCLUDING ALL` + Milvus collection; status
+  lifecycle `provisioning → active/failed`; archive = soft-delete (data never dropped).
+- **Services** (`ingest_raw`, `extract_text`): each `run_once()` iterates active licitaciones
+  via the registry, scoping a per-tenant `search_path` engine + MinIO `<slug>/` prefix; paused/
+  archived tenants are skipped by status (no Redis needed). Tenant primitives live in each
+  service's `app/tenant.py`.
+- **Dashboard worker** (`src/worker/tasks.py`): the embedding polls iterate active licitaciones;
+  `embed_file`/`vision_extract` resolve `{slug,schema_name,collection}` from the task payload
+  (`src/worker/tenant_runtime.py`), upsert into `MilvusStore(collection_name=...)`, and write
+  back in the tenant schema; honor `rag:pause:vectorize:<slug>` + the global key.
+- **Retrieval/chat** (`retrieval_admin`, `chatbot_response`): `/retrieve` and `/chat` take a
+  `licitacion` slug, resolve the collection/schema **server-side from the registry**, and reject
+  unknown/inactive ones (no silent cross-tenant fallback).
+- **Tenant SQL sessions**: pin `search_path` to `<schema>, public`. The dashboard uses
+  `SET LOCAL` (`tenant_session`) for single-transaction reads and a connection-level
+  `-csearch_path` / asyncpg `server_settings` engine (`src/tenant/engine.py`) for the
+  commit-heavy worker; services use a connection-level engine in `app/tenant.py`.
+
+A stack with an empty registry falls back to the legacy single-tenant layout (public schema,
+`rag_documents`, no prefix) — so pre-multitenancy behavior is preserved.
+
+**Deferred (still public/global-scoped):** the destructive dashboard re-run actions
+(`re-ingest`/`re-transform`/`re-vectorize`, `clear-data`/`erase-all`) and the
+`restart_vectorization` / `delete_file_vectors` Celery tasks do not yet take a licitación.
+
+---
+
 ## Common Commands
 
 ```bash
@@ -197,6 +242,10 @@ status:       downloaded → converted → embedded
 Celery beat fires `poll_text_ready_for_embedding` every `EMBEDDING_POLL_INTERVAL_SECONDS` (default 300s).
 Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatically.
 
+This same chain runs **per active licitación**: each stage iterates the registry and operates
+inside that licitación's schema (`file_records` resolves via `search_path`), so the states above
+are per-tenant. See **Multi-Tenancy by Licitación** above.
+
 ---
 
 ## Where to Make Changes
@@ -212,6 +261,9 @@ Files stuck in `embedding_queued` = OpenAI 429 rate limit; they retry automatica
 | Vision OCR client | `dashboard/rag-dashboard-core/src/vision/client.py` |
 | Milvus schema / index | `dashboard/rag-dashboard-core/src/vectorizer/milvus_store.py` |
 | DB schema / migrations | `schema/rag-schema/` (Alembic) |
+| Licitación lifecycle (create/pause/archive/provision) | `dashboard/.../src/tenant/service.py` + `src/api/licitaciones_routes.py` |
+| Tenant slug/schema/session/engine primitives | `dashboard/.../src/tenant/` (each service: `app/tenant.py`) |
+| Worker tenant context (poll/embed routing) | `dashboard/.../src/worker/tenant_runtime.py` |
 | Docker Compose / env vars | `docker-compose.yml`, `.env.example` |
 | Backup / restore scripts | `scripts/backup.sh`, `scripts/restore.sh` |
 
