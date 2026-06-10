@@ -628,29 +628,43 @@ def _merge_kv(aggregated: dict, page_kv: dict) -> None:
 
 
 @app.task(base=RetryableTask, bind=True)
-def delete_file_vectors(self, drive_file_id: str) -> dict:
-    """Remove vectors from Milvus, files from MinIO, and metadata from PostgreSQL."""
+def delete_file_vectors(
+    self, drive_file_id: str, slug: str = "", schema_name: str = "", collection: str = ""
+) -> dict:
+    """Remove ONE file's vectors (Milvus), objects (MinIO) and metadata (PostgreSQL), per licitación.
+
+    The tenant is carried in the task args (slug / schema_name / collection), defaulting to the
+    legacy public tenant when absent, so the vector delete, MinIO cleanup and record delete all
+    target that licitación's collection / ``<slug>/`` key prefix / schema only."""
     from src.vectorizer.milvus_store import MilvusStore
+    from src.worker.task_helpers import build_tenant_metadata_repo
 
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
-    task_logger = logger.bind(trace_id=trace_id, drive_file_id=drive_file_id, task="delete_file_vectors")
-    task_logger.info("task.started")
 
     settings = build_settings()
+    ctx = context_from_payload(
+        {"slug": slug, "schema_name": schema_name, "collection": collection}, settings
+    )
+    task_logger = logger.bind(
+        trace_id=trace_id, drive_file_id=drive_file_id, task="delete_file_vectors", slug=ctx.slug or "public"
+    )
+    task_logger.info("task.started")
+
     storage = build_storage(settings)
-    repo, cleanup = build_metadata_repo(settings)
+    repo, cleanup = build_tenant_metadata_repo(settings, ctx.schema_name)
 
     try:
-        store = MilvusStore(settings)
+        store = MilvusStore(settings, collection_name=ctx.collection)
         store.delete_by_source(drive_file_id)
         task_logger.info("vectors.removed")
 
-        # Clean up MinIO objects
-        raw_key = f"{drive_file_id}"
-        text_key = f"{drive_file_id}.txt"
+        # Clean up MinIO objects under this licitación's key prefix
+        prefix = f"{ctx.slug}/" if ctx.slug else ""
+        raw_key = f"{prefix}{drive_file_id}"
+        text_key = f"{prefix}{drive_file_id}.txt"
         try:
             storage.delete(settings.minio_bucket_raw, raw_key)
             storage.delete(settings.minio_bucket_text, text_key)
@@ -745,27 +759,37 @@ def restart_ingest(self) -> dict:
 
 
 @app.task(bind=True, max_retries=1)
-def restart_vectorization(self) -> dict:
-    """Drop Milvus vectors, reset embedding-related metadata, re-queue embedding poll."""
-    from sqlalchemy import create_engine, text
+def restart_vectorization(self, slug: str = "", schema_name: str = "", collection: str = "") -> dict:
+    """Drop ONE licitación's Milvus collection, reset its embedding metadata, re-queue the poll.
+
+    Scoped to the licitación carried in the task args (slug / schema_name / collection),
+    defaulting to the legacy public tenant when absent. The collection drop and the
+    file_records reset both target that tenant only; the embedding poll re-embeds it (and
+    naturally skips every other tenant, whose rows were not reset)."""
     from sqlalchemy.orm import Session
 
+    from sqlalchemy import text
+
+    from src.tenant.engine import build_tenant_engine
     from src.vectorizer.milvus_store import MilvusStore
-    from src.worker.task_helpers import build_settings, ensure_milvus_collection
+    from src.worker.task_helpers import build_settings
 
     settings = build_settings()
+    ctx = context_from_payload(
+        {"slug": slug, "schema_name": schema_name, "collection": collection}, settings
+    )
     headers: dict[str, str] = {}
     if hasattr(self, "request") and self.request:
         headers = self.request.get("headers") or {}
     trace_id = headers.get("trace_id", str(uuid4()))
-    task_logger = logger.bind(trace_id=trace_id, task="restart_vectorization")
+    task_logger = logger.bind(trace_id=trace_id, task="restart_vectorization", slug=ctx.slug or "public")
     task_logger.info("task.started")
 
-    store = MilvusStore(settings)
+    store = MilvusStore(settings, collection_name=ctx.collection)
     store.drop_collection_if_exists()
-    ensure_milvus_collection(settings)
+    store.ensure_collection()
 
-    engine = create_engine(settings.database_url_sync.get_secret_value())
+    engine = build_tenant_engine(settings, ctx.schema_name)
     try:
         with Session(engine) as session:
             session.execute(

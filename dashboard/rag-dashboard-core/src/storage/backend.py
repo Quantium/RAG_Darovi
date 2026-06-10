@@ -129,6 +129,35 @@ class MinIOStorage:
             removed += 1
         return removed
 
+    def remove_objects(
+        self, bucket: str, prefix: str = "", exclude_prefixes: tuple[str, ...] = ()
+    ) -> int:
+        """Delete objects under a key prefix, preserving any owned by other licitaciones.
+
+        Scopes a destructive clear to a single tenant. A real licitación passes its
+        ``<slug>/`` prefix, which is self-contained. The public/legacy tenant passes an
+        empty prefix plus the ``<slug>/`` prefixes of every *other* licitación in
+        ``exclude_prefixes``, so only the flat legacy objects are removed and no other
+        tenant's keys are ever touched. This is the cross-tenant guard that
+        :meth:`remove_all_objects` lacks.
+
+        Args:
+            bucket: MinIO bucket name.
+            prefix: Key prefix to restrict deletion to ('' = whole bucket, minus excludes).
+            exclude_prefixes: Key prefixes to preserve (other tenants' '<slug>/').
+
+        Returns:
+            Number of objects that were deleted.
+        """
+        removed = 0
+        for obj in self._client.list_objects(bucket, prefix=prefix or None, recursive=True):
+            name = obj.object_name
+            if any(name.startswith(ex) for ex in exclude_prefixes):
+                continue
+            self._client.remove_object(bucket, name)
+            removed += 1
+        return removed
+
 
 class LocalStorage:
     def __init__(self, base_path: Path) -> None:

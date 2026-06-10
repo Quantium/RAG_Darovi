@@ -1128,12 +1128,27 @@ document.getElementById("btn-pause-ingest")?.addEventListener("click", () => tog
 document.getElementById("btn-pause-transform")?.addEventListener("click", () => togglePause("transform"));
 document.getElementById("btn-pause-vectorize")?.addEventListener("click", () => togglePause("vectorize"));
 
-document.querySelector("#dash-card-raw .btn-re-ingest")?.addEventListener("click", async () => {
-    if (!confirm("Re-ingest: clear MinIO RAW and reset pipeline rows. Continue?")) return;
-    const btn = document.querySelector("#dash-card-raw .btn-re-ingest");
+function selectedLicitacionLabel() {
+    const slug = state.selectedLicitacion || "";
+    const row = (state.licitaciones || []).find((l) => l.slug === slug);
+    return row ? row.name : (slug || "(pública)");
+}
+
+// Every destructive dashboard action is scoped to the currently selected licitación: it sends
+// ?licitacion=<slug>, names the licitación in the confirm dialog, and refuses to run with no
+// selection when licitaciones exist — so one tenant's action can never touch another's data.
+async function runDestructiveAction(path, actionLabel, btnSelector) {
+    const slug = state.selectedLicitacion || "";
+    if ((state.licitaciones || []).length > 0 && !slug) {
+        alert("Selecciona una licitación primero.");
+        return;
+    }
+    if (!confirm(`${actionLabel}\n\nSolo afecta a la licitación «${selectedLicitacionLabel()}». ¿Continuar?`)) return;
+    const btn = document.querySelector(btnSelector);
     if (btn) btn.disabled = true;
     try {
-        const res = await fetch("/dashboard/re-ingest", { method: "POST", headers: apiHeaders(false, true) });
+        const url = slug ? `${path}?licitacion=${encodeURIComponent(slug)}` : path;
+        const res = await fetch(url, { method: "POST", headers: apiHeaders(false, true) });
         if (!res.ok) throw new Error(await res.text());
         await loadDashboard();
     } catch (e) {
@@ -1141,7 +1156,10 @@ document.querySelector("#dash-card-raw .btn-re-ingest")?.addEventListener("click
     } finally {
         if (btn) btn.disabled = false;
     }
-});
+}
+
+document.querySelector("#dash-card-raw .btn-re-ingest")?.addEventListener("click", () =>
+    runDestructiveAction("/dashboard/re-ingest", "Re-ingest: borra el RAW en MinIO y reinicia las filas del pipeline.", "#dash-card-raw .btn-re-ingest"));
 
 document.querySelector("#dash-card-transform .btn-run-transform")?.addEventListener("click", async () => {
     const btn = document.querySelector("#dash-card-transform .btn-run-transform");
@@ -1157,65 +1175,17 @@ document.querySelector("#dash-card-transform .btn-run-transform")?.addEventListe
     }
 });
 
-document.querySelector("#dash-card-transform .btn-re-transform")?.addEventListener("click", async () => {
-    if (!confirm("Re-transform: clear extracted TEXT in MinIO and reset text stage. Continue?")) return;
-    const btn = document.querySelector("#dash-card-transform .btn-re-transform");
-    if (btn) btn.disabled = true;
-    try {
-        const res = await fetch("/dashboard/re-transform", { method: "POST", headers: apiHeaders(false, true) });
-        if (!res.ok) throw new Error(await res.text());
-        await loadDashboard();
-    } catch (e) {
-        alert(e.message || String(e));
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-});
+document.querySelector("#dash-card-transform .btn-re-transform")?.addEventListener("click", () =>
+    runDestructiveAction("/dashboard/re-transform", "Re-transform: borra el TEXT extraído en MinIO y reinicia la etapa de texto.", "#dash-card-transform .btn-re-transform"));
 
-document.querySelector("#dash-card-postgres .btn-clear-data")?.addEventListener("click", async () => {
-    if (!confirm("Clear data: delete all Redis conversation/cache keys and drop Milvus vectors. Continue?")) return;
-    const btn = document.querySelector("#dash-card-postgres .btn-clear-data");
-    if (btn) btn.disabled = true;
-    try {
-        const res = await fetch("/dashboard/clear-data", { method: "POST", headers: apiHeaders(false, true) });
-        if (!res.ok) throw new Error(await res.text());
-        await loadDashboard();
-    } catch (e) {
-        alert(e.message || String(e));
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-});
+document.querySelector("#dash-card-postgres .btn-clear-data")?.addEventListener("click", () =>
+    runDestructiveAction("/dashboard/clear-data", "Clear data: borra el historial de conversación y dropea los vectores de Milvus.", "#dash-card-postgres .btn-clear-data"));
 
-document.querySelector("#dash-card-postgres .btn-erase-all")?.addEventListener("click", async () => {
-    if (!confirm("Erase all: permanently delete every file record, extracted text, vectors, MinIO objects, and Redis keys. This cannot be undone. Continue?")) return;
-    const btn = document.querySelector("#dash-card-postgres .btn-erase-all");
-    if (btn) btn.disabled = true;
-    try {
-        const res = await fetch("/dashboard/erase-all", { method: "POST", headers: apiHeaders(false, true) });
-        if (!res.ok) throw new Error(await res.text());
-        await loadDashboard();
-    } catch (e) {
-        alert(e.message || String(e));
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-});
+document.querySelector("#dash-card-postgres .btn-erase-all")?.addEventListener("click", () =>
+    runDestructiveAction("/dashboard/erase-all", "Erase all: borra permanentemente registros, texto, vectores, objetos MinIO y claves Redis. No se puede deshacer.", "#dash-card-postgres .btn-erase-all"));
 
-document.querySelector("#dash-card-milvus .btn-re-vectorize")?.addEventListener("click", async () => {
-    if (!confirm("Re-vectorize: drop Milvus collection and re-queue embeddings. Continue?")) return;
-    const btn = document.querySelector("#dash-card-milvus .btn-re-vectorize");
-    if (btn) btn.disabled = true;
-    try {
-        const res = await fetch("/dashboard/re-vectorize", { method: "POST", headers: apiHeaders(false, true) });
-        if (!res.ok) throw new Error(await res.text());
-        await loadDashboard();
-    } catch (e) {
-        alert(e.message || String(e));
-    } finally {
-        if (btn) btn.disabled = false;
-    }
-});
+document.querySelector("#dash-card-milvus .btn-re-vectorize")?.addEventListener("click", () =>
+    runDestructiveAction("/dashboard/re-vectorize", "Re-vectorize: dropea la colección Milvus y re-encola embeddings.", "#dash-card-milvus .btn-re-vectorize"));
 
 /**
  * Poll the pipeline status endpoint and update the connection indicator in the header.

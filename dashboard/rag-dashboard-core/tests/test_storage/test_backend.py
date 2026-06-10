@@ -52,6 +52,33 @@ class TestMinIOStorage:
         assert n == 2
         assert mock_minio_client.remove_object.call_count == 2
 
+    def test_remove_objects_with_prefix(self, mock_minio_client, settings):
+        """Verify remove_objects forwards the prefix and deletes only the listed objects."""
+        mock_minio_client.list_objects.return_value = [
+            MagicMock(object_name="ejemplo1/a"),
+            MagicMock(object_name="ejemplo1/b"),
+        ]
+        storage = MinIOStorage(settings, client=mock_minio_client)
+        n = storage.remove_objects("raw-files", prefix="ejemplo1/")
+        assert n == 2
+        assert mock_minio_client.remove_object.call_count == 2
+        _, kwargs = mock_minio_client.list_objects.call_args
+        assert kwargs.get("prefix") == "ejemplo1/"
+
+    def test_remove_objects_public_excludes_other_tenants(self, mock_minio_client, settings):
+        """Verify a public-tenant clear skips keys owned by other licitaciones (cross-tenant guard)."""
+        mock_minio_client.list_objects.return_value = [
+            MagicMock(object_name="legacy1.pdf"),
+            MagicMock(object_name="legacy2.pdf"),
+            MagicMock(object_name="ejemplo1/x.pdf"),
+            MagicMock(object_name="otro/y.pdf"),
+        ]
+        storage = MinIOStorage(settings, client=mock_minio_client)
+        n = storage.remove_objects("raw-files", prefix="", exclude_prefixes=("ejemplo1/", "otro/"))
+        assert n == 2
+        removed = {call.args[1] for call in mock_minio_client.remove_object.call_args_list}
+        assert removed == {"legacy1.pdf", "legacy2.pdf"}
+
 
 class TestLocalStorage:
     def test_local_fallback_upload(self, tmp_path, settings):

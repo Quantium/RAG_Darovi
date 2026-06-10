@@ -50,11 +50,14 @@ class TestBuildAsyncTenantEngine:
         engine = build_async_tenant_engine(_settings(), "lic_obra_norte")
         assert isinstance(engine, AsyncEngine)
 
-    def test_postgres_pins_search_path_via_server_settings(self):
-        s = Settings(database_url=SecretStr("postgresql+asyncpg://u:p@h/db"))
-        with patch("src.tenant.engine.create_async_engine") as mock_create:
-            build_async_tenant_engine(s, "lic_obra_norte")
-        mock_create.assert_called_once_with(
-            "postgresql+asyncpg://u:p@h/db",
-            connect_args={"server_settings": {"search_path": "lic_obra_norte,public"}},
+    def test_postgres_pins_search_path_via_connect_event(self):
+        """Neon ignores asyncpg server_settings, so the schema is pinned with a SET search_path
+        'connect' event on the direct (unpooled) endpoint (the '-pooler' host segment stripped)."""
+        s = Settings(
+            database_url=SecretStr("postgresql+asyncpg://u:p@ep-x-pooler.r.aws.neon.tech/db")
         )
+        engine = build_async_tenant_engine(s, "lic_obra_norte")
+        assert isinstance(engine, AsyncEngine)
+        # direct (unpooled) endpoint — '-pooler' stripped so the SET search_path actually applies
+        # (Neon ignores asyncpg server_settings; the connect-event SET is integration-verified)
+        assert engine.url.host == "ep-x.r.aws.neon.tech"

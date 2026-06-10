@@ -95,6 +95,43 @@ async def _resolve_dashboard_tenant(request: Request, slug: str | None) -> Dashb
     return DashboardTenant(slug="", schema_name="public", collection=settings.milvus_collection, source_path="")
 
 
+async def _resolve_destructive_tenant(
+    request: Request, licitacion: str | None
+) -> tuple[DashboardTenant, tuple[str, ...]]:
+    """Resolve the licitación a destructive action targets, with a cross-tenant guard.
+
+    Destructive actions must never fall back to a global scope. Whenever the registry holds
+    any rows, an explicit, selectable ``licitacion`` is required (400 otherwise) so a stray
+    click can only ever affect a single tenant. Returns the resolved tenant plus the
+    ``<slug>/`` MinIO prefixes owned by *other* licitaciones — non-empty only for the public
+    tenant, whose flat key space would otherwise include them — to pass as ``exclude_prefixes``.
+    """
+    async with AsyncSession(request.app.state.engine) as session:
+        rows = await LicitacionRepository(session).list_all(include_archived=False)
+    if rows and not licitacion:
+        raise HTTPException(status_code=400, detail="licitación is required for destructive actions")
+    tenant = await _resolve_dashboard_tenant(request, licitacion)
+    others = tuple(f"{r.slug}/" for r in rows if r.schema_name != "public" and r.slug != tenant.slug)
+    exclude = others if tenant.schema_name == "public" else ()
+    return tenant, exclude
+
+
+async def _reset_in_tenant(request: Request, schema_name: str, reset_fn) -> None:
+    """Run an async file_records reset helper inside one licitación schema.
+
+    Uses a connection-level ``search_path`` engine (Neon direct endpoint) so the helper's
+    bare-table UPDATE and its own COMMIT resolve to the tenant schema, never ``public``.
+    """
+    from src.tenant.engine import build_async_tenant_engine
+
+    engine = build_async_tenant_engine(request.app.state.settings, schema_name)
+    try:
+        async with AsyncSession(engine) as session:
+            await reset_fn(session)
+    finally:
+        await engine.dispose()
+
+
 async def _scoped_pg_counts(engine, schema_name: str, probe: ProcessingProbe):
     """Gather the PostgreSQL-side dashboard aggregates inside the licitación schema."""
     async with tenant_session(engine, schema_name) as session:
@@ -114,6 +151,50 @@ def _count_vectors(request: Request, collection: str) -> int:
     from src.vectorizer.milvus_store import MilvusStore
 
     return MilvusStore(settings, collection_name=collection).count_entities()
+
+
+def _tenant_vector_store(request: Request, collection: str):
+    """Return a MilvusStore for a licitación collection, reusing app state for the default one."""
+    settings: Settings = request.app.state.settings
+    if collection == settings.milvus_collection:
+        return request.app.state.vector_store
+    from src.vectorizer.milvus_store import MilvusStore
+
+    return MilvusStore(settings, collection_name=collection)
+
+
+def _clear_tenant_redis(redis_client, tenant: DashboardTenant, other_slugs: tuple[str, ...]) -> int:
+    """Delete one licitación's conversation history and flush the shared retrieval cache.
+
+    Conversation history is per-tenant data, so only this licitación's keys are removed:
+    ``chatbot:conv:<slug>:*`` for a real tenant; the un-prefixed legacy ``conv:*`` /
+    ``chatbot:conv:*`` for the public tenant, explicitly skipping any other tenant's
+    ``chatbot:conv:<slug>:`` keys. The retrieval cache (``ra-retrieval:*``) holds no tenant
+    data (TTL'd query results), so it is flushed wholesale to avoid serving results for
+    just-dropped vectors.
+    """
+
+    def _as_str(k) -> str:
+        return k.decode() if isinstance(k, (bytes, bytearray)) else k
+
+    deleted = 0
+    if tenant.slug:
+        keys = list(redis_client.scan_iter(match=f"chatbot:conv:{tenant.slug}:*", count=500))
+        if keys:
+            deleted += redis_client.delete(*keys)
+    else:
+        protect = tuple(f"chatbot:conv:{s}:" for s in other_slugs)
+        for pattern in ("conv:*", "chatbot:conv:*"):
+            keys = [
+                k for k in redis_client.scan_iter(match=pattern, count=500)
+                if not _as_str(k).startswith(protect)
+            ]
+            if keys:
+                deleted += redis_client.delete(*keys)
+    cache_keys = list(redis_client.scan_iter(match="ra-retrieval:*", count=500))
+    if cache_keys:
+        deleted += redis_client.delete(*cache_keys)
+    return deleted
 
 
 @dashboard_router.get(
@@ -279,29 +360,30 @@ async def _reset_all_raw_stage(session: AsyncSession) -> None:
     response_model=DashboardActionResult,
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
-async def dashboard_re_ingest(request: Request) -> DashboardActionResult:
-    """Clear all raw MinIO objects, reset file records, and queue a full re-ingestion.
+async def dashboard_re_ingest(request: Request, licitacion: str | None = None) -> DashboardActionResult:
+    """Clear ONE licitación's raw MinIO objects, reset its file records, and re-ingest it.
 
-    Requires the X-Dashboard-Confirm: yes header. Also triggers the ingest-raw HTTP service
-    if INGEST_RAW_TRIGGER_URL is configured.
+    Scoped to the selected licitación: removes only its ``<slug>/`` RAW objects (never another
+    tenant's keys) and resets file_records inside its schema. Requires the X-Dashboard-Confirm:
+    yes header and — whenever any licitación exists — an explicit ``licitacion``. Re-ingestion
+    is delegated to the ingest-raw service, which is per-tenant and idempotent: it re-uploads
+    this licitación's cleared files from source and skips every other tenant (unchanged).
 
     Args:
         request: Incoming FastAPI request carrying app state.
+        licitacion: Slug of the licitación to re-ingest.
 
     Returns:
         DashboardActionResult describing how many objects were cleared and the trigger outcome.
     """
     settings: Settings = request.app.state.settings
+    tenant, exclude = await _resolve_destructive_tenant(request, licitacion)
     storage = MinIOStorage(settings)
-    n = storage.remove_all_objects(settings.minio_bucket_raw)
+    n = storage.remove_objects(
+        settings.minio_bucket_raw, prefix=tenant.key_prefix, exclude_prefixes=exclude
+    )
 
-    async with AsyncSession(request.app.state.engine) as session:
-        await _reset_all_raw_stage(session)
-
-    from src.worker.tasks import run_incremental_sync
-
-    job = run_incremental_sync.delay()
-    job_ids = [str(job.id)] if job and job.id else []
+    await _reset_in_tenant(request, tenant.schema_name, _reset_all_raw_stage)
 
     trigger_ok = False
     base = (settings.ingest_raw_trigger_url or "").strip()
@@ -313,11 +395,11 @@ async def dashboard_re_ingest(request: Request) -> DashboardActionResult:
         except Exception as exc:
             logger.warning("dashboard.re_ingest_trigger_failed", error=str(exc))
 
-    detail = f"Cleared {n} RAW object(s); queued incremental sync."
+    detail = f"Cleared {n} RAW object(s) for '{tenant.slug or 'public'}'; reset raw stage."
     if base:
         detail += " Ingest-raw trigger: " + ("ok" if trigger_ok else "failed or unreachable")
 
-    return DashboardActionResult(status="queued", detail=detail, job_ids=job_ids)
+    return DashboardActionResult(status="queued", detail=detail, job_ids=[])
 
 
 async def _reset_text_for_raw_synced(session: AsyncSession) -> None:
@@ -374,23 +456,29 @@ async def dashboard_trigger_transform(request: Request) -> DashboardActionResult
     response_model=DashboardActionResult,
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
-async def dashboard_re_transform(request: Request) -> DashboardActionResult:
-    """Clear all text MinIO objects, reset text stage for raw-synced rows, and trigger extract-text.
+async def dashboard_re_transform(request: Request, licitacion: str | None = None) -> DashboardActionResult:
+    """Clear ONE licitación's text MinIO objects, reset its text stage, and trigger extract-text.
 
-    Requires the X-Dashboard-Confirm: yes header.
+    Scoped to the selected licitación: removes only its ``<slug>/`` TEXT objects and resets the
+    text stage for its raw-synced rows inside its schema. Requires the X-Dashboard-Confirm: yes
+    header and — whenever any licitación exists — an explicit ``licitacion``. The extract-text
+    service is per-tenant and idempotent, so it re-extracts only this licitación.
 
     Args:
         request: Incoming FastAPI request carrying app state.
+        licitacion: Slug of the licitación to re-transform.
 
     Returns:
         DashboardActionResult describing cleared objects and the trigger outcome.
     """
     settings: Settings = request.app.state.settings
+    tenant, exclude = await _resolve_destructive_tenant(request, licitacion)
     storage = MinIOStorage(settings)
-    n = storage.remove_all_objects(settings.minio_bucket_text)
+    n = storage.remove_objects(
+        settings.minio_bucket_text, prefix=tenant.key_prefix, exclude_prefixes=exclude
+    )
 
-    async with AsyncSession(request.app.state.engine) as session:
-        await _reset_text_for_raw_synced(session)
+    await _reset_in_tenant(request, tenant.schema_name, _reset_text_for_raw_synced)
 
     trigger_ok = False
     base = (settings.extract_text_trigger_url or "").strip()
@@ -402,7 +490,7 @@ async def dashboard_re_transform(request: Request) -> DashboardActionResult:
         except Exception as exc:
             logger.warning("dashboard.re_transform_trigger_failed", error=str(exc))
 
-    detail = f"Cleared {n} TEXT object(s); reset text stage for raw-synced rows."
+    detail = f"Cleared {n} TEXT object(s) for '{tenant.slug or 'public'}'; reset text stage."
     if base:
         detail += " Extract-text trigger: " + ("ok" if trigger_ok else "failed or unreachable")
 
@@ -414,24 +502,30 @@ async def dashboard_re_transform(request: Request) -> DashboardActionResult:
     response_model=DashboardActionResult,
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
-async def dashboard_re_vectorize(request: Request) -> DashboardActionResult:
-    """Drop and recreate the Milvus collection, then queue a re-embedding pass via Celery.
+async def dashboard_re_vectorize(request: Request, licitacion: str | None = None) -> DashboardActionResult:
+    """Drop and recreate ONE licitación's Milvus collection, then re-embed only that tenant.
 
-    Requires the X-Dashboard-Confirm: yes header.
+    Scoped to the selected licitación: resets the ``rag_<slug>`` collection and the embedding
+    state inside its schema. Requires the X-Dashboard-Confirm: yes header and — whenever any
+    licitación exists — an explicit ``licitacion``.
 
     Args:
         request: Incoming FastAPI request carrying app state.
+        licitacion: Slug of the licitación to re-vectorize.
 
     Returns:
         DashboardActionResult with the queued Celery job ID.
     """
     from src.worker.tasks import restart_vectorization
 
-    job = restart_vectorization.delay()
+    tenant, _ = await _resolve_destructive_tenant(request, licitacion)
+    job = restart_vectorization.delay(
+        slug=tenant.slug, schema_name=tenant.schema_name, collection=tenant.collection
+    )
     job_ids = [str(job.id)] if job and job.id else []
     return DashboardActionResult(
         status="queued",
-        detail="Vector collection reset and embedding poll queued (Celery).",
+        detail=f"Vector collection reset and re-embedding queued for '{tenant.slug or 'public'}'.",
         job_ids=job_ids,
     )
 
@@ -441,25 +535,33 @@ async def dashboard_re_vectorize(request: Request) -> DashboardActionResult:
     response_model=DashboardActionResult,
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
-async def dashboard_clear_data(request: Request) -> DashboardActionResult:
-    """Clear Redis conversation/cache keys and drop all Milvus vectors."""
+async def dashboard_clear_data(request: Request, licitacion: str | None = None) -> DashboardActionResult:
+    """Drop ONE licitación's Milvus vectors and clear its conversation history.
+
+    Scoped to the selected licitación: drops/recreates its ``rag_<slug>`` collection and removes
+    only its conversation keys (other tenants' history is preserved). Requires the
+    X-Dashboard-Confirm: yes header and — whenever any licitación exists — an explicit ``licitacion``.
+    """
+    tenant, exclude = await _resolve_destructive_tenant(request, licitacion)
+    other_slugs = tuple(p.rstrip("/") for p in exclude)
+
     redis_client = request.app.state.redis_cache
+    deleted_redis = _clear_tenant_redis(redis_client, tenant, other_slugs)
 
-    deleted_redis = 0
-    for pattern in ("conv:*", "chatbot:conv:*", "ra-retrieval:*"):
-        keys = list(redis_client.scan_iter(match=pattern, count=500))
-        if keys:
-            deleted_redis += redis_client.delete(*keys)
+    store = _tenant_vector_store(request, tenant.collection)
+    deleted_vectors = store.count_entities()
+    store.drop_collection_if_exists()
+    store.ensure_collection()
 
-    vector_store = request.app.state.vector_store
-    deleted_vectors = vector_store.count_entities()
-    vector_store.drop_collection_if_exists()
-    vector_store.ensure_collection()
-
-    logger.info("dashboard.clear_data", deleted_redis=deleted_redis, deleted_vectors=deleted_vectors)
+    logger.info(
+        "dashboard.clear_data",
+        slug=tenant.slug or "public",
+        deleted_redis=deleted_redis,
+        deleted_vectors=deleted_vectors,
+    )
     return DashboardActionResult(
         status="ok",
-        detail=f"Cleared {deleted_redis} Redis keys and {deleted_vectors} Milvus vectors.",
+        detail=f"Cleared {deleted_redis} Redis keys and {deleted_vectors} Milvus vectors for '{tenant.slug or 'public'}'.",
         job_ids=[],
     )
 
@@ -469,39 +571,49 @@ async def dashboard_clear_data(request: Request) -> DashboardActionResult:
     response_model=DashboardActionResult,
     dependencies=[Depends(verify_api_key), Depends(_require_dashboard_confirm)],
 )
-async def dashboard_erase_all(request: Request) -> DashboardActionResult:
-    """Delete everything: Postgres records, MinIO objects, Milvus vectors, Redis keys."""
+async def dashboard_erase_all(request: Request, licitacion: str | None = None) -> DashboardActionResult:
+    """Delete ONE licitación's data: its Postgres rows, MinIO objects, Milvus vectors, Redis keys.
+
+    Scoped to the selected licitación: Milvus ``rag_<slug>`` collection, ``<slug>/`` MinIO objects
+    in both buckets (never another tenant's keys), file_records/sync_state inside its schema, and
+    its conversation history. Requires the X-Dashboard-Confirm: yes header and — whenever any
+    licitación exists — an explicit ``licitacion``.
+    """
     settings: Settings = request.app.state.settings
+    tenant, exclude = await _resolve_destructive_tenant(request, licitacion)
+    other_slugs = tuple(p.rstrip("/") for p in exclude)
 
-    # Redis
+    # Redis — this licitación's conversation history only
     redis_client = request.app.state.redis_cache
-    deleted_redis = 0
-    for pattern in ("conv:*", "chatbot:conv:*", "ra-retrieval:*"):
-        keys = list(redis_client.scan_iter(match=pattern, count=500))
-        if keys:
-            deleted_redis += redis_client.delete(*keys)
+    deleted_redis = _clear_tenant_redis(redis_client, tenant, other_slugs)
 
-    # Milvus
-    vector_store = request.app.state.vector_store
-    deleted_vectors = vector_store.count_entities()
-    vector_store.drop_collection_if_exists()
-    vector_store.ensure_collection()
+    # Milvus — this licitación's collection only
+    store = _tenant_vector_store(request, tenant.collection)
+    deleted_vectors = store.count_entities()
+    store.drop_collection_if_exists()
+    store.ensure_collection()
 
-    # MinIO
+    # MinIO — only this licitación's <slug>/ objects (excluding other tenants for public)
     storage = MinIOStorage(settings)
-    raw_cleared = storage.remove_all_objects(settings.minio_bucket_raw)
-    text_cleared = storage.remove_all_objects(settings.minio_bucket_text)
+    raw_cleared = storage.remove_objects(settings.minio_bucket_raw, prefix=tenant.key_prefix, exclude_prefixes=exclude)
+    text_cleared = storage.remove_objects(settings.minio_bucket_text, prefix=tenant.key_prefix, exclude_prefixes=exclude)
 
-    # Postgres — delete all file records (extracted_documents cascades) and sync state
-    async with AsyncSession(request.app.state.engine) as session:
+    # Postgres — delete this licitación's rows inside its own schema (extracted_documents cascades)
+    deleted_rows = 0
+
+    async def _erase_pg(session: AsyncSession) -> None:
+        nonlocal deleted_rows
         await session.execute(text("DELETE FROM extracted_documents"))
         result = await session.execute(text("DELETE FROM file_records"))
         deleted_rows = result.rowcount
         await session.execute(text("DELETE FROM sync_state"))
         await session.commit()
 
+    await _reset_in_tenant(request, tenant.schema_name, _erase_pg)
+
     logger.info(
         "dashboard.erase_all",
+        slug=tenant.slug or "public",
         deleted_redis=deleted_redis,
         deleted_vectors=deleted_vectors,
         raw_cleared=raw_cleared,
@@ -511,8 +623,8 @@ async def dashboard_erase_all(request: Request) -> DashboardActionResult:
     return DashboardActionResult(
         status="ok",
         detail=(
-            f"Erased {deleted_rows} Postgres rows, {raw_cleared} RAW + {text_cleared} TEXT MinIO objects, "
-            f"{deleted_vectors} Milvus vectors, {deleted_redis} Redis keys."
+            f"Erased '{tenant.slug or 'public'}': {deleted_rows} Postgres rows, {raw_cleared} RAW + "
+            f"{text_cleared} TEXT MinIO objects, {deleted_vectors} Milvus vectors, {deleted_redis} Redis keys."
         ),
         job_ids=[],
     )

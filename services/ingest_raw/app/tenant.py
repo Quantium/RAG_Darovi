@@ -87,12 +87,25 @@ def read_active_licitaciones(engine: Engine) -> list[Licitacion]:
     ]
 
 
+def _direct_url(url: str) -> str:
+    """Return the Neon *direct* (unpooled) URL for a search_path-pinned tenant engine.
+
+    Neon's pooler (PgBouncer) rejects the ``search_path`` libpq startup parameter
+    ("unsupported startup parameter in options"), so any engine that pins search_path
+    at connect time must target the direct endpoint — the pooled host minus its
+    ``-pooler`` segment. No-op for non-pooled URLs (e.g. sqlite in tests), so it is
+    always safe to apply.
+    """
+    return url.replace("-pooler.", ".", 1)
+
+
 def build_tenant_engine(settings: Settings, schema_name: str) -> Engine:
     """Build a sync engine whose connections resolve unqualified tables in the licitación schema.
 
     The search_path is set via the libpq ``options`` connect arg, so every bare-table query in
-    the existing raw-SQL repository transparently targets the tenant schema.
+    the existing raw-SQL repository transparently targets the tenant schema. The Neon direct
+    (unpooled) endpoint is required because the pooler rejects the search_path startup param.
     """
     validate_schema_name(schema_name)
-    url = settings.database_url_sync.get_secret_value()
+    url = _direct_url(settings.database_url_sync.get_secret_value())
     return create_engine(url, connect_args={"options": f"-csearch_path={schema_name},public"})

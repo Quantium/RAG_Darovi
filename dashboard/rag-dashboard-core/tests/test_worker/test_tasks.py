@@ -153,7 +153,7 @@ class TestWorkerTasks:
         mock_repo.update_status_sync.assert_called_with("f1", "failed", error_message="error")
 
     @patch("src.vectorizer.milvus_store.MilvusStore")
-    @patch("src.worker.tasks.build_metadata_repo")
+    @patch("src.worker.task_helpers.build_tenant_metadata_repo")
     @patch("src.worker.tasks.build_storage")
     def test_delete_file_vectors_removes_all(self, mock_storage_builder, mock_repo_builder, mock_milvus_store_cls):
         """Verify delete_file_vectors deletes the DB record and Milvus vectors for a file."""
