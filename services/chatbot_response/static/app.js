@@ -128,28 +128,144 @@ function addMessage(role, text) {
   return el;
 }
 
+// ── File explorer ─────────────────────────────────────────────────────────────
+const DUMMY_TREE = [
+  { name: "Laboratorios Calidad", type: "folder", children: [
+    { name: "Bases_Licitacion.pdf", type: "pdf" },
+    { name: "Especificaciones_Tecnicas.pdf", type: "pdf" },
+    { name: "Cronograma.pdf", type: "pdf" },
+    { name: "Anexo_A_Requisitos.pdf", type: "pdf" },
+    { name: "Criterios_Evaluacion.pdf", type: "pdf" },
+  ]},
+  { name: "Ejemplo1", type: "folder", children: [
+    { name: "Contrato_Marco.pdf", type: "pdf" },
+    { name: "Terminos_Referencia.pdf", type: "pdf" },
+  ]},
+];
+
+const fileTreeEl = document.getElementById("file-tree");
+const allTreeRows = new Map(); // filename -> DOM row
+
+function buildTreeNode(node, depth = 0) {
+  const wrapper = document.createElement("div");
+
+  const row = document.createElement("div");
+  row.className = "tree-row";
+  row.style.paddingLeft = `${14 + depth * 16}px`;
+
+  if (node.type === "folder") {
+    const chev = document.createElement("span");
+    chev.className = "tree-chevron";
+    chev.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`;
+
+    const icon = document.createElement("span");
+    icon.className = "tree-icon folder";
+    icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`;
+
+    const label = document.createElement("span");
+    label.className = "tree-label";
+    label.textContent = node.name;
+
+    row.appendChild(chev);
+    row.appendChild(icon);
+    row.appendChild(label);
+
+    const children = document.createElement("div");
+    children.className = "tree-children";
+    (node.children || []).forEach(child => children.appendChild(buildTreeNode(child, depth + 1)));
+
+    row.addEventListener("click", () => {
+      const open = children.classList.toggle("open");
+      chev.classList.toggle("open", open);
+    });
+
+    wrapper.appendChild(row);
+    wrapper.appendChild(children);
+  } else {
+    const spacer = document.createElement("span");
+    spacer.style.width = "12px";
+    spacer.style.flexShrink = "0";
+
+    const icon = document.createElement("span");
+    icon.className = `tree-icon ${node.type}`;
+    icon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+
+    const label = document.createElement("span");
+    label.className = "tree-label";
+    label.textContent = node.name;
+
+    row.appendChild(spacer);
+    row.appendChild(icon);
+    row.appendChild(label);
+    wrapper.appendChild(row);
+
+    allTreeRows.set(node.name, row);
+  }
+
+  return wrapper;
+}
+
+function renderFileTree(nodes) {
+  fileTreeEl.innerHTML = "";
+  allTreeRows.clear();
+  nodes.forEach(n => fileTreeEl.appendChild(buildTreeNode(n)));
+  // expand all folders by default
+  fileTreeEl.querySelectorAll(".tree-children").forEach(el => el.classList.add("open"));
+  fileTreeEl.querySelectorAll(".tree-chevron").forEach(el => el.classList.add("open"));
+}
+
+function highlightFiles(names) {
+  allTreeRows.forEach((row, name) => {
+    row.classList.toggle("highlighted", names.includes(name));
+  });
+}
+
+// ── Real file tree from Neon (file_records table) ─────────────────────────────
+// Uncomment when the API endpoint is ready. Each record has { name, path } where
+// path is slash-separated (e.g. "Laboratorios Calidad/Bases_Licitacion.pdf").
+//
+// async function loadFileTree() {
+//   try {
+//     const res = await fetch("/file-records", {
+//       headers: { "Authorization": `Bearer ${getToken()}` },
+//     });
+//     if (!res.ok) throw new Error(`file-records ${res.status}`);
+//     const records = await res.json(); // [{ name, path }, ...]
+//
+//     // Build nested tree from flat path list
+//     const root = [];
+//     const folderMap = new Map();
+//     for (const { name, path } of records) {
+//       const parts = path ? path.split("/") : [name];
+//       const fileName = parts[parts.length - 1];
+//       const folderName = parts.length > 1 ? parts[parts.length - 2] : null;
+//       if (folderName) {
+//         if (!folderMap.has(folderName)) {
+//           const folder = { name: folderName, type: "folder", children: [] };
+//           folderMap.set(folderName, folder);
+//           root.push(folder);
+//         }
+//         folderMap.get(folderName).children.push({ name: fileName, type: "pdf" });
+//       } else {
+//         root.push({ name: fileName, type: "pdf" });
+//       }
+//     }
+//     renderFileTree(root);
+//   } catch (err) {
+//     console.error("file-records", err);
+//     renderFileTree(DUMMY_TREE); // fallback to dummy on error
+//   }
+// }
+// loadFileTree(); // call this instead of renderFileTree(DUMMY_TREE) below
+
+renderFileTree(DUMMY_TREE);
+
 function renderSources(sources) {
   if (!sources || sources.length === 0) {
-    sourcesEl.innerHTML = "";
+    highlightFiles([]);
     return;
   }
-  const rows = sources.map(s => {
-    const score = (s.score * 100).toFixed(2) + "%";
-    const preview = s.text_preview.replace(/\n/g, " ");
-
-    // Se deja comentado para versiones posteriores donde los archivos estén en línea  
-    // const nameCell = s.file_url
-    //   ? `<a href="${s.file_url}" target="_blank" rel="noopener">${s.source_name}</a>`
-    //   : s.source_name;
-
-    const nameCell = s.source_name;
-    return `<tr><td>${nameCell}</td><td>${preview}</td><td>${score}</td></tr>`;
-  }).join("");
-  sourcesEl.innerHTML = `
-    <table>
-      <thead><tr><th>Archivo</th><th>Vista previa</th><th>Score</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  highlightFiles(sources.map(s => s.source_name));
 }
 
 // ── Rating ────────────────────────────────────────────────────────────────────
