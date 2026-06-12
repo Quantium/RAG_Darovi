@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inteligencia Documental</title>
-    <link rel="stylesheet" href="/styles.css?v=2" />
+    <link rel="stylesheet" href="/styles.css?v=4" />
   </head>
   <body>
 
@@ -60,28 +60,45 @@
           </button>
         </div>
 
-        <!-- Messages -->
-        <div id="messages" class="messages"></div>
+        <!-- Body: file explorer + chat -->
+        <div class="chat-body">
 
-        <!-- Sources -->
-        <div id="sources"></div>
+          <!-- File Explorer Sidebar -->
+          <div class="file-explorer">
+            <div class="explorer-header">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Archivos
+            </div>
+            <div id="file-tree" class="file-tree"></div>
+          </div>
 
-        <!-- Rating bar goes here (inserted by JS before the form) -->
+          <!-- Chat Main -->
+          <div class="chat-main">
+            <!-- Messages -->
+            <div id="messages" class="messages"></div>
 
-        <!-- Input -->
-        <div class="chat-input-area">
-          <form id="chat-form" class="chat-form">
-            <input id="query-input" placeholder="Escribe tu mensaje..." autocomplete="off" required />
-            <button type="submit" class="send-btn" title="Enviar">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-            </button>
-          </form>
+            <!-- Sources (hidden, used by JS) -->
+            <div id="sources" hidden></div>
+
+            <!-- Rating bar goes here (inserted by JS before the form) -->
+
+            <!-- Input -->
+            <div class="chat-input-area">
+              <form id="chat-form" class="chat-form">
+                <input id="query-input" placeholder="Escribe tu mensaje..." autocomplete="off" required />
+                <button type="submit" class="send-btn" title="Enviar">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
+              </form>
+            </div>
+          </div>
+
         </div>
 
       </div>
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=2"></script>
   </body>
 </html>

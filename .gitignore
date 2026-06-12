@@ -36,6 +36,7 @@ certs/*.pem
 # AWS nginx TLS certs (generated on EC2 by openssl)
 nginx/certs/*.key
 nginx/certs/*.crt
+nginx/certs/*.pem
 
 # Local user data
 LICITACIONES

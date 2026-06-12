@@ -37,6 +37,8 @@ services:
     build:
       context: ./services/chatbot_response
     env_file: .env.aws
+    volumes:
+      - ./services/chatbot_response/static:/app/static:ro
     environment:
       API_PORT: "8020"
       REDIS_CACHE_URL: redis://redis:6379/2
