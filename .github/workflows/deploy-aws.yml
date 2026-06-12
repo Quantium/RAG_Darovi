@@ -17,10 +17,13 @@ jobs:
           script: |
             set -e
             cd ~/RAG_Darovi
-            git pull origin main
+            OLD_HEAD=$(git rev-parse HEAD)
+            git fetch origin main
+            # Hard reset instead of pull: never blocked by untracked/modified files on EC2
+            git reset --hard origin/main
 
             # Run schema migrations only when schema/ files changed in this push
-            SCHEMA_CHANGED=$(git diff HEAD~1 HEAD --name-only | grep -c '^schema/' || true)
+            SCHEMA_CHANGED=$(git diff "$OLD_HEAD" HEAD --name-only | grep -c '^schema/' || true)
             if [ "$SCHEMA_CHANGED" -gt 0 ]; then
               source ~/.profile
               cd schema/rag-schema
